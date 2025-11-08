@@ -1,7 +1,9 @@
 import pathlib
 import re
 
-from .geometry import Point
+from PIL import Image
+
+from .geometry import Point, Rectangle, Size
 from .settings import DIRS
 
 _RE_HAS_COORDS = re.compile(r"[^a-z0-9](\d+)[^a-z0-9](\d+)[^a-z0-9](\d+)[^a-z0-9](\d+)\.png$", flags=re.IGNORECASE)
@@ -10,7 +12,10 @@ _RE_HAS_COORDS = re.compile(r"[^a-z0-9](\d+)[^a-z0-9](\d+)[^a-z0-9](\d+)[^a-z0-9
 class Project:
     def __init__(self, path: pathlib.Path, coords: tuple[str, str, str, str]):
         self.path = path
-        self.coords = Point.from4(*(int(c) for c in coords))
+        with Image.open(path) as img:
+            size = Size(*img.size)
+        point = Point.from4(*map(int, coords))
+        self.rect = Rectangle(point, size)
 
 
 def get_project_paths() -> list[Project]:

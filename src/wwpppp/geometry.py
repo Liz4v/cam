@@ -29,6 +29,9 @@ class Size(typing.NamedTuple):
     def __str__(self) -> str:
         return f"{self.w}x{self.h}"
 
+    def __bool__(self) -> bool:
+        return self.w > 0 and self.h > 0
+
 
 class Rectangle(typing.NamedTuple):
     point: Point = Point()
@@ -36,6 +39,9 @@ class Rectangle(typing.NamedTuple):
 
     def __str__(self):
         return f"{self.point}-{self.size}"
+
+    def __bool__(self) -> bool:
+        return bool(self.size)
 
     def __contains__(self, other: "Rectangle") -> bool:
         return (
@@ -47,6 +53,16 @@ class Rectangle(typing.NamedTuple):
 
     def __sub__(self, other: Point) -> "Rectangle":
         return Rectangle(self.point - other, self.size)
+
+    def __mul__(self, other: "Rectangle") -> "Rectangle":
+        """Intersection of two rectangles"""
+        x1 = max(self.point.x, other.point.x)
+        y1 = max(self.point.y, other.point.y)
+        x2 = min(self.point.x + self.size.w, other.point.x + other.size.w)
+        y2 = min(self.point.y + self.size.h, other.point.y + other.size.h)
+        if x2 <= x1 or y2 <= y1:
+            return Rectangle(Point(0, 0), Size(0, 0))
+        return Rectangle(Point(x1, y1), Size(x2 - x1, y2 - y1))
 
     @property
     @functools.cache
