@@ -70,8 +70,7 @@ def search_tiles() -> typing.Iterable[FoundTile]:
                 source=source,
                 offset=Point(x2, y2),
             )
-        # maybe delete or move the file after processing?
-        # path.unlink()
+        path.unlink()  # delete after processing
 
 
 def stitch_tiles(rect: Rectangle) -> Image.Image:

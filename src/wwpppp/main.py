@@ -22,6 +22,7 @@ def main():
             seen_tiles.add(found.tile)
     # Rebuild partials as needed
     targets = {proj.path: proj for tile in seen_tiles for proj in tile_to_project[tile]}
+    logger.info(f"Rebuilding {len(targets)} project(s) from tiles")
     for proj in targets.values():
         current = stitch_tiles(proj.rect)
         proj.compare_with_current(current)

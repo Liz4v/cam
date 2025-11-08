@@ -61,24 +61,35 @@ class Project:
     def compare_with_current(self, current: Image.Image) -> None:
         """Compare each pixel between both images. It will generate a new image only with the differences."""
         newdata = map(pixel_compare, current.getdata(), self.image.getdata())
-        fix_data, remaining_data = map(bytes, zip(*newdata))
+        remaining_data, fix_data = map(bytes, zip(*newdata))
+
+        fix_path = self.path.with_suffix(".fix.png")
+        remaining_path = self.path.with_suffix(".remaining.png")
+
+        if max(remaining_data) == 0:
+            logger.info(f"{self.path.name}: No remaining pixels, project is complete and ungriefed.")
+            remaining_path.unlink(missing_ok=True)
+            fix_path.unlink(missing_ok=True)
+            return
 
         with PALETTE.new(self.rect.size) as remaining:
             remaining.putdata(remaining_data)
-            remaining.save(self.path.with_suffix(".remaining.png"))
+            remaining.save(remaining_path)
+        logger.info(f"{remaining_path.name}: Saved image with all remaining pixels.")
 
         fix_path = self.path.with_suffix(".fix.png")
-        if fix_data == remaining_data:
+        if fix_data == remaining_data or max(fix_data) == 0:
             fix_path.unlink(missing_ok=True)
             return
         with PALETTE.new(self.rect.size) as fix:
             fix.putdata(fix_data)
             fix.save(fix_path)
+        logger.info(f"{fix_path.name}: Saved image with mismatched pixels only.")
 
 
 def pixel_compare(current: int, desired: int) -> tuple[int, int]:
-    """Returns a tuple of (fix, remaining) pixel values."""
-    return (desired if current else 0, desired if desired != current else 0)
+    """Returns a tuple of (remaining, fix) pixel values."""
+    return (0, 0) if desired == current else (desired, desired if current else 0)
 
 
 class CachedProjectMetadata(list):
