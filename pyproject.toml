@@ -1,0 +1,20 @@
+[project]
+name = "wwpppp"
+version = "0.1.0"
+description = "Watcher for WPlace Paint Project Progress"
+authors = [
+    { name = "Liz Balbuena" }
+]
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+wwpppp = "wwpppp.main:main"
+
+[tool.ruff]
+line-length = 120
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
