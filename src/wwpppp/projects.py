@@ -1,31 +1,32 @@
-import datetime
-import pathlib
 import pickle
 import re
 import sqlite3
-import typing
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 from PIL import Image
 
+from . import DIRS
 from .geometry import Point, Rectangle, Size
 from .ingest import stitch_tiles
 from .palette import PALETTE
-from .settings import DIRS
 
 _RE_HAS_COORDS = re.compile(r"[- _](\d+)[- _](\d+)[- _](\d+)[- _](\d+)\.png$", flags=re.IGNORECASE)
 
 
 class Project:
     @classmethod
-    def list(cls) -> list["Project"]:
+    def iter(cls) -> set["Project"]:
         path = DIRS.user_pictures_path / "wplace"
         path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Searching for projects in {path}")
-        return list(filter(None, map(Project.try_open, sorted(path.iterdir()))))
+        maybe_projects = (cls.try_open(p) for p in sorted(path.iterdir()))
+        return filter(None, maybe_projects)
 
     @classmethod
-    def try_open(cls, path: pathlib.Path) -> typing.Self | None:
+    def try_open(cls, path: Path) -> Optional["Project"]:
         match = _RE_HAS_COORDS.search(path.name)
         if not match or not path.is_file():
             return None  # no coords or otherwise invalid/irrelevant
@@ -51,7 +52,7 @@ class Project:
         new.compare_with_current()
         return new
 
-    def __init__(self, path: pathlib.Path, rect: Rectangle):
+    def __init__(self, path: Path, rect: Rectangle):
         self.path = path
         self.rect = rect
         self._image = None
@@ -103,15 +104,15 @@ class Project:
             return
         self._save_diff(fix_path, fix_data)
 
-    def _save_diff(self, path: pathlib.Path, data: bytes) -> None:
+    def _save_diff(self, path: Path, data: bytes) -> None:
         with PALETTE.new(self.rect.size) as diff_image:
             diff_image.putdata(data)
             diff_image.save(path)
         opaque = sum(1 for v in data if v)
         percentage = opaque * 100 / len(data)
-        time_to_go = datetime.timedelta(seconds=27) * opaque
+        time_to_go = timedelta(seconds=27) * opaque
         days, hours = divmod(round(time_to_go.total_seconds() / 3600), 24)
-        when = (datetime.datetime.now() + time_to_go).strftime("%b %d %H:%M")
+        when = (datetime.now() + time_to_go).strftime("%b %d %H:%M")
         logger.info(f"{path.name}: Saved diff ({opaque}px, {percentage:.2f}%, {days}d{hours}h to {when}).")
 
 
@@ -139,7 +140,7 @@ class CachedProjectMetadata(list):
             cls._db.commit()
         return cls._db.cursor()
 
-    def __init__(self, path: pathlib.Path):
+    def __init__(self, path: Path):
         self.key = path.name
         self.check = int(path.stat().st_mtime)
         cursor = self._cursor()

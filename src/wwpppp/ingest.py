@@ -1,21 +1,21 @@
 import itertools
 import os
-import pathlib
 import re
-import typing
+from pathlib import Path
+from typing import Iterable, NamedTuple
 
 from loguru import logger
 from PIL import Image
 
+from . import DIRS
 from .geometry import Point, Rectangle, Size
 from .palette import PALETTE
-from .settings import DIRS
 
 _RE_FILENAME = re.compile(r"^wplace-cached-(\d+)000x(\d+)000-(\d+)_(\d+)_0_0-([-\d]+T[-\d]+Z)\.png$")
 
 
 class LazyImage:
-    def __init__(self, path: pathlib.Path):
+    def __init__(self, path: Path):
         self.path = path
         self._image = None
 
@@ -31,7 +31,7 @@ class LazyImage:
             self._image.close()
 
 
-class FoundTile(typing.NamedTuple):
+class FoundTile(NamedTuple):
     tile: tuple[int, int]
     source: LazyImage
     offset: Point
@@ -53,10 +53,10 @@ class FoundTile(typing.NamedTuple):
         return True
 
 
-def search_tiles() -> typing.Iterable[FoundTile]:
+def search_tiles(path: Path | None = None) -> Iterable[FoundTile]:
     inbox_path = DIRS.user_downloads_path
     found_paths = []
-    for path in inbox_path.iterdir():
+    for path in (path,) if path else inbox_path.iterdir():
         match = _RE_FILENAME.fullmatch(path.name)
         if not match:
             continue

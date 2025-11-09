@@ -1,5 +1,5 @@
-import itertools
-import pathlib
+from itertools import chain
+from pathlib import Path
 
 from loguru import logger
 from PIL import Image
@@ -16,14 +16,14 @@ _COLORS = """
 
 class Palette:
     def __init__(self, colors: list[bytes]):
-        self.raw = bytes(itertools.chain.from_iterable(colors))
+        self.raw = bytes(chain.from_iterable(colors))
         self.dict = {(*c, 255): i for i, c in enumerate(colors) if i}
         self.dict[tuple(bytes.fromhex("10AE82FF"))] = 16  # wrong teal reported in wplacepaint.com
 
         self.image = Image.new("P", (1, 1))
         self.image.putpalette(self.raw)
 
-    def open_image(self, path: str | pathlib.Path) -> Image.Image | None:
+    def open_image(self, path: str | Path) -> Image.Image | None:
         image = Image.open(path)
         paletted = self.ensure(image)
         if image is paletted or image is None:

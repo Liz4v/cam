@@ -1,8 +1,8 @@
-import functools
-import typing
+from functools import cache
+from typing import NamedTuple
 
 
-class Point(typing.NamedTuple):
+class Point(NamedTuple):
     x: int = 0
     y: int = 0
 
@@ -25,7 +25,7 @@ class Point(typing.NamedTuple):
         return Point(self.x * scalar, self.y * scalar)
 
 
-class Size(typing.NamedTuple):
+class Size(NamedTuple):
     w: int = 0
     h: int = 0
 
@@ -36,7 +36,7 @@ class Size(typing.NamedTuple):
         return self.w > 0 and self.h > 0
 
 
-class Rectangle(typing.NamedTuple):
+class Rectangle(NamedTuple):
     point: Point = Point()
     size: Size = Size()
 
@@ -71,13 +71,13 @@ class Rectangle(typing.NamedTuple):
         return Rectangle(Point(x1, y1), Size(x2 - x1, y2 - y1))
 
     @property
-    @functools.cache
+    @cache
     def pilbox(self) -> tuple[int, int, int, int]:
         """PIL box tuple for cropping: (left, upper, right, lower)"""
         return (self.point.x, self.point.y, self.point.x + self.size.w, self.point.y + self.size.h)
 
     @property
-    @functools.cache
+    @cache
     def tiles(self) -> frozenset[tuple[int, int]]:
         """Set of tile coordinates (tx, ty) covered by this rectangle"""
         x_start = self.point.x // 1000
