@@ -11,7 +11,7 @@ from PIL import Image
 from . import DIRS
 from .geometry import Point, Rectangle, Size
 from .ingest import stitch_tiles
-from .palette import PALETTE
+from .palette import PALETTE, ColorNotInPalette
 
 _RE_HAS_COORDS = re.compile(r"[- _](\d+)[- _](\d+)[- _](\d+)[- _](\d+)\.png$", flags=re.IGNORECASE)
 
@@ -38,18 +38,20 @@ class Project:
             except TypeError:
                 logger.warning(f"{path.name}: Cache data invalid, reprocessing")
 
-        image = PALETTE.open_image(path)
-        if image is None:
-            logger.warning(f"{path.name}: Colors not in palette")
+        try:
+            # Convert now, but close immediately. We'll reopen later as needed.
+            with PALETTE.open_image(path) as image:
+                size = Size(*image.size)
+        except ColorNotInPalette as e:
+            logger.warning(f"{path.name}: Color not in palette: {e}")
             path.rename(path.with_suffix(".invalid.png"))
             return None
-        rect = Rectangle(Point.from4(*map(int, match.groups())), Size(*image.size))
-        image.close()  # we'll reopen later if needed
+        rect = Rectangle(Point.from4(*map(int, match.groups())), size)
 
         logger.info(f"{path.name}: Detected project at {rect}")
 
         new = cls(path, *cached(rect))
-        new.compare_with_current()
+        new.run_diff()
         return new
 
     def __init__(self, path: Path, rect: Rectangle):
@@ -78,7 +80,7 @@ class Project:
     def __del__(self):
         del self.image
 
-    def compare_with_current(self) -> None:
+    def run_diff(self) -> None:
         """Compare each pixel between both images. It will generate a new image only with the differences."""
         target_data = self.image.getdata()
         with stitch_tiles(self.rect) as current:
@@ -92,7 +94,7 @@ class Project:
             return  # project is not started, no need for diffs
 
         if max(remaining_data) == 0:
-            logger.info(f"{self.path.name}: No remaining pixels, project is complete and ungriefed.")
+            logger.info(f"{self.path.name}: Complete.")
             remaining_path.unlink(missing_ok=True)
             fix_path.unlink(missing_ok=True)
             return
@@ -155,7 +157,7 @@ class CachedProjectMetadata(list):
     def _load(self) -> list:
         cursor = self._cursor()
         cursor.execute("SELECT mtime, contents FROM cache WHERE filename = ? ", (self.key,))
-        check, blob = cursor.fetchone() or (None,None)
+        check, blob = cursor.fetchone() or (None, None)
         if check != self.check:
             return []
         return pickle.loads(blob)

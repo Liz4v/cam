@@ -36,9 +36,8 @@ class Main:
 
         # Rebuild partials as needed
         targets = {proj for tile in seen_tiles for proj in self.tiles[tile]}
-        logger.info(f"Rebuilding {len(targets)} project(s) from tiles")
         for proj in targets:
-            proj.compare_with_current()
+            proj.run_diff()
 
     def watch_for_updates(self) -> None:
         logger.info("Watching for new tiles and projects...")

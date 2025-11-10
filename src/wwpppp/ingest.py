@@ -9,7 +9,7 @@ from PIL import Image
 
 from . import DIRS
 from .geometry import Point, Rectangle, Size
-from .palette import PALETTE
+from .palette import PALETTE, ColorNotInPalette
 
 _RE_FILENAME = re.compile(r"^wplace-cached-(\d+)000x(\d+)000-(\d+)_(\d+)_0_0-([-\d]+T[-\d]+Z)\.png$")
 
@@ -41,7 +41,11 @@ class FoundTile(NamedTuple):
         """Extract the tile image from the source image, storing in cache if not fully transparent"""
         rect = Rectangle(self.offset * 1000, Size(1000, 1000))
         with self.source.image.crop(rect.pilbox) as cropped:
-            image = PALETTE.ensure(cropped)
+            try:
+                image = PALETTE.ensure(cropped)
+            except ColorNotInPalette as e:
+                logger.error(f"Tile {self.tile} contains color not in palette: {e}")
+                return False
         with image:
             _, maximum = image.getextrema()
             if maximum == 0:
