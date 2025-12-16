@@ -46,8 +46,8 @@ class FoundTile(NamedTuple):
 
     def obtain(self) -> bool:
         """Extracts the tile image from the source image, storing in cache if not fully transparent"""
-        rect = Rectangle(self.offset * 1000, Size(1000, 1000))
-        with self.source.image.crop(rect.pilbox) as cropped:
+        rect = Rectangle.from_point_size(self.offset * 1000, Size(1000, 1000))
+        with self.source.image.crop(rect) as cropped:
             try:
                 image = PALETTE.ensure(cropped)
             except ColorNotInPalette as e:
@@ -95,5 +95,5 @@ def stitch_tiles(rect: Rectangle) -> Image.Image:
             continue
         with Image.open(cache_path) as tile_image:
             offset = Point(*tile) * 1000 - rect.point
-            image.paste(tile_image, Rectangle(offset, Size(1000, 1000)).pilbox)
+            image.paste(tile_image, Rectangle.from_point_size(offset, Size(1000, 1000)))
     return image

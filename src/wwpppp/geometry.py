@@ -42,47 +42,60 @@ class Size(NamedTuple):
 
     def __bool__(self) -> bool:
         """Non-empty size."""
-        return self.w > 0 and self.h > 0
+        return self.w != 0 and self.h != 0
 
 
 class Rectangle(NamedTuple):
-    """Represents a rectangle in 2D lattice space."""
+    """Represents a rectangle in 2D lattice space. Uses PIL-style coordinates."""
 
-    point: Point = Point()
-    size: Size = Size()
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    @cache
+    def point(self) -> Point:
+        """Top-left point of the rectangle."""
+        return Point(min(self.left, self.right), min(self.top, self.bottom))
+
+    @property
+    @cache
+    def size(self) -> Size:
+        """Size of the rectangle."""
+        return Size(abs(self.right - self.left), abs(self.bottom - self.top))
+
+    @classmethod
+    def from_point_size(cls, point: Point, size: Size) -> "Rectangle":
+        """Create a Rectangle from a top-left point and size."""
+        return cls(point.x, point.y, point.x + size.w, point.y + size.h)
 
     def __str__(self):
         return f"{self.size}-{self.point}"
 
     def __bool__(self) -> bool:
         """Non-empty rectangle."""
-        return bool(self.size)
+        return self.left != self.right and self.top != self.bottom
 
     def __contains__(self, other: "Rectangle") -> bool:
         """Check if this rectangle fully contains another rectangle."""
         return (
-            self.point.x <= other.point.x
-            and other.point.x + other.size.w <= self.point.x + self.size.w
-            and self.point.y <= other.point.y
-            and other.point.y + other.size.h <= self.point.y + self.size.h
+            self.left <= other.left
+            and self.top <= other.top
+            and other.right <= self.right
+            and other.bottom <= self.bottom
         )
 
     def __sub__(self, other: Point) -> "Rectangle":
         """Offset rectangle by a point."""
-        return Rectangle(self.point - other, self.size)
-
-    @property
-    @cache
-    def pilbox(self) -> tuple[int, int, int, int]:
-        """PIL box tuple for cropping: (left, upper, right, lower)."""
-        return (self.point.x, self.point.y, self.point.x + self.size.w, self.point.y + self.size.h)
+        return Rectangle(self.left - other.x, self.top - other.y, self.right - other.x, self.bottom - other.y)
 
     @property
     @cache
     def tiles(self) -> frozenset[tuple[int, int]]:
         """Set of tile coordinates (tx, ty) covered by this rectangle."""
-        x_start = self.point.x // 1000
-        x_end = (self.point.x + self.size.w - 1) // 1000
-        y_start = self.point.y // 1000
-        y_end = (self.point.y + self.size.h - 1) // 1000
-        return frozenset((tx, ty) for tx in range(x_start, x_end + 1) for ty in range(y_start, y_end + 1))
+        left = self.left // 1000
+        top = self.top // 1000
+        right = (self.right + 999) // 1000
+        bottom = (self.bottom + 999) // 1000
+        return frozenset((tx, ty) for tx in range(left, right) for ty in range(top, bottom))

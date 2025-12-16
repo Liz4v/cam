@@ -1,4 +1,3 @@
-import pickle
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -51,7 +50,7 @@ class Project:
             logger.warning(f"{path.name}: Color not in palette: {e}")
             path.rename(path.with_suffix(".invalid.png"))
             return None
-        rect = Rectangle(Point.from4(*map(int, match.groups())), size)
+        rect = Rectangle.from_point_size(Point.from4(*map(int, match.groups())), size)
 
         logger.info(f"{path.name}: Detected project at {rect}")
 
@@ -129,8 +128,8 @@ class Project:
 
     def forget(self) -> None:
         """Deletes cached metadata about this project."""
-        cache = CachedProjectMetadata(self.path)
-        cache.forget()
+        cached = CachedProjectMetadata(self.path)
+        cached.forget()
 
 
 def pixel_compare(current: int, desired: int) -> tuple[int, int]:
@@ -153,38 +152,56 @@ class CachedProjectMetadata(list):
                 CREATE TABLE IF NOT EXISTS cache (
                     filename TEXT,
                     mtime INT,
-                    contents BLOB,
+                    left INT,
+                    top INT,
+                    right INT,
+                    bottom INT,
                     PRIMARY KEY (filename)
                 )
             """)
         return cls._db.cursor()
 
+    @classmethod
+    def _reset_table(cls) -> None:
+        logger.error("Cache table seems malformed or out of date. Resetting.")
+        cls._cursor().execute("DROP TABLE IF EXISTS cache")
+        cls._db = None  # type: ignore[class-var]
+
     def __init__(self, path: Path):
         """Loads cached metadata for the project at `path`."""
         self.key = path.name
         try:
-            self.check = int(path.stat().st_mtime)
+            self.mtime = int(path.stat().st_mtime)
         except FileNotFoundError:
-            self.check = 0  # signal missing file
+            self.mtime = 0  # signal missing file
         super().__init__(self._load())
 
     def _load(self) -> list:
         """Loads cached metadata from the database, if valid."""
         cursor = self._cursor()
-        cursor.execute("SELECT mtime, contents FROM cache WHERE filename = ? ", (self.key,))
-        check, blob = cursor.fetchone() or (0, b"")
-        if check != self.check:
+        cursor.execute("SELECT * FROM cache WHERE filename = ? ", (self.key,))
+        row = cursor.fetchone()
+        if not row:
             return []
-        return pickle.loads(blob)
+        try:
+            _, mtime, left, top, right, bottom = row
+        except ValueError:
+            self._reset_table()
+            return []
+        if mtime != self.mtime:
+            return []
+        return [Rectangle(left, top, right, bottom)]
 
-    def __call__(self, *args) -> tuple:
-        """Caches the given metadata for this project."""
+    def __call__(self, rect: Rectangle) -> list:
+        """Saves a new cached metadata for this project."""
         cursor = self._cursor()
         cursor.execute(
-            "REPLACE INTO cache (filename, mtime, contents) VALUES (?, ?, ?)",
-            (self.key, self.check, pickle.dumps(args)),
+            "REPLACE INTO cache VALUES (?, ?, ?, ?, ?, ?)",
+            (self.key, self.mtime, rect.left, rect.top, rect.right, rect.bottom),
         )
-        return args
+        self.clear()
+        self.append(rect)
+        return self
 
     def forget(self) -> None:
         """Deletes cached metadata for this project."""
