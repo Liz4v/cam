@@ -29,7 +29,7 @@ class TilePoller:
     def _run(self):
         while not self._stop.is_set():
             for tile in self.tiles:
-                if self._stop.wait(30):  # doesn't make sense to check too fast
+                if self._stop.wait(127):  # doesn't make sense to check too fast
                     return
                 if has_tile_changed(tile):
                     self.callback(tile)
@@ -53,6 +53,7 @@ def has_tile_changed(tile: Tile) -> bool:
         if cache_path.exists():
             with Image.open(cache_path) as cached:
                 if bytes(cached.tobytes()) == bytes(paletted.tobytes()):
+                    logger.info(f"Tile {tile}: No change detected.")
                     return False  # no change
         logger.info(f"Tile {tile}: Change detected, updating cache...")
         paletted.save(cache_path)

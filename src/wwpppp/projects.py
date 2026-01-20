@@ -93,9 +93,8 @@ class Project:
         target_data = self.image.getdata()
         with stitch_tiles(self.rect) as current:
             newdata = map(pixel_compare, current.getdata(), target_data)  # type: ignore[misc]
-            remaining_data, fix_data = map(bytes, zip(*newdata))
+            remaining_data = bytes(newdata)
 
-        fix_path = self.path.with_suffix(".fix.png")
         remaining_path = self.path.with_suffix(".remaining.png")
 
         if remaining_data == target_data:
@@ -104,15 +103,8 @@ class Project:
         if max(remaining_data) == 0:
             logger.info(f"{self.path.name}: Complete.")
             remaining_path.unlink(missing_ok=True)
-            fix_path.unlink(missing_ok=True)
             return
         self._save_diff(remaining_path, remaining_data)
-
-        fix_path = self.path.with_suffix(".fix.png")
-        if fix_data == remaining_data or max(fix_data) == 0:
-            fix_path.unlink(missing_ok=True)
-            return
-        self._save_diff(fix_path, fix_data)
 
     def _save_diff(self, path: Path, data: bytes) -> None:
         """Saves a diff image to the given path, and estimates completion time."""
@@ -132,9 +124,9 @@ class Project:
         cached.forget()
 
 
-def pixel_compare(current: int, desired: int) -> tuple[int, int]:
-    """Returns a tuple of (remaining, fix) pixel values."""
-    return (0, 0) if desired == current else (desired, current and desired)
+def pixel_compare(current: int, desired: int) -> int:
+    """Returns the desired pixel value if it differs from the current pixel, otherwise returns transparent."""
+    return 0 if desired == current else desired
 
 
 class CachedProjectMetadata(list):
