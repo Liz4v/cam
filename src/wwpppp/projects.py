@@ -90,9 +90,9 @@ class Project:
     def run_diff(self) -> None:
         """Compares each pixel between both images. Generates a new image only with the differences."""
 
-        target_data = self.image.getdata()
+        target_data = self.image.get_flattened_data()
         with stitch_tiles(self.rect) as current:
-            newdata = map(pixel_compare, current.getdata(), target_data)  # type: ignore[misc]
+            newdata = map(pixel_compare, current.get_flattened_data(), target_data)  # type: ignore[misc]
             remaining = bytes(newdata)
 
         if remaining == target_data:

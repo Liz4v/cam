@@ -24,3 +24,13 @@ line-length = 120
 [build-system]
 requires = ["uv_build"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=wwpppp --cov-report=term-missing --cov-fail-under=95 -q"
+python_files = ["tests/*.py"]

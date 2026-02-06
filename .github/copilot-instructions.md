@@ -1,3 +1,5 @@
+Also read [local-instructions.md](local-instructions.md) for per-workspace instructions.
+
 **Project Overview**
 
 wwpppp is a small watcher for WPlace paint projects. It polls WPlace tile images, stitches cached tiles, and diffs them against project image files a user places in their platform pictures folder. The package entry point is exposed as the console script `wwpppp` (see `pyproject.toml`).
@@ -56,6 +58,9 @@ uv run wwpppp
 - Linting: run `ruff` (project defines `line-length = 120`).
 - Formatting: no explicit formatter in repo; follow current style and ruff suggestions.
 - Tests: there are no tests included. Add unit tests under a `tests/` folder if you add logic to be verified. Focus tests on `geometry`, `palette.lookup`, and `projects` diff logic.
+ - Tests: unit tests live under `tests/`. We use `pytest` with `pytest-cov` for coverage.
+   - Coverage is configured in `pyproject.toml` under `[tool.pytest.ini_options]`.
+   - The project enforces a coverage threshold for all modules.
 
 **Running and debugging**
 - To reproduce tile fetching behavior, run `TilePoller` with a short list of `Tile` objects in an interactive script and observe `DIRS.user_cache_path` for generated `tile-*.png` files.
@@ -80,5 +85,6 @@ uv run wwpppp
 
 If you want, I can also:
 - add a minimal `tests/` scaffold and a couple of unit tests,
-- add a `CONTRIBUTING.md` with commit/message conventions,
-- or create GitHub Actions to run `ruff` and (future) tests.
+- add a `CONTRIBUTING.md` with commit/message conventions.
+
+Note: GitHub Actions will not be added by default. I will only scaffold CI workflows if you explicitly request them.

@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
-
-# Virtual environments
-.venv
+.venv/
+/.github/local-instructions.md
+.coverage
+.pytest_cache/

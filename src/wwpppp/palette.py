@@ -38,7 +38,7 @@ class Palette:
             return image  # no need to convert
         size = image.size
         with _ensure_rgba(image) as rgba:  # `image` will be closed by the end of this block
-            data = bytes(map(self.lookup, rgba.getdata()))  # type: ignore[misc]
+            data = bytes(map(self.lookup, rgba.get_flattened_data()))  # type: ignore[misc]
         image = self.new(size)
         image.putdata(data)
         return image
