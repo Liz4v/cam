@@ -5,6 +5,8 @@ from pathlib import Path
 from loguru import logger
 from PIL import Image
 
+# THIS IS THE OFFICIAL WPLACE PALETTE. It is not expected to ever change.
+# Well, except for the first color (FF00FF) which is my transparency placeholder.
 _COLORS = """
     FF00FF 000000 3C3C3C 787878 D2D2D2 FFFFFF 600018 ED1C24 FF7F27 F6AA09 F9DD3B FFFABC 0EB968 13E67B 87FF5E 0C816E
     10AEA6 13E1BE 60F7F2 28509E 4093E4 6B50F6 99B1FB 780C99 AA38B9 E09FF9 CB007A EC1F80 F38DA9 684634 95682A F8B277

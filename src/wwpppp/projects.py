@@ -1,5 +1,4 @@
 import re
-import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional, Self
@@ -8,6 +7,7 @@ from loguru import logger
 from PIL import Image
 
 from . import DIRS
+from .cache import _CACHE_DB
 from .geometry import Point, Rectangle, Size
 from .ingest import stitch_tiles
 from .palette import PALETTE, ColorNotInPalette
@@ -85,7 +85,10 @@ class Project:
             self._image = None
 
     def __del__(self):
-        del self.image
+        try:
+            del self.image
+        except Exception:
+            pass
 
     def run_diff(self) -> None:
         """Compares each pixel between both images. Generates a new image only with the differences."""
@@ -122,34 +125,21 @@ def pixel_compare(current: int, desired: int) -> int:
 
 
 class CachedProjectMetadata(list):
-    """Caches metadata about a project in a local SQLite database."""
+    """Caches metadata about a project in a local SQLite database.
 
-    _db: sqlite3.Connection = None  # type: ignore[class-var]
+    Uses a short-lived connection per operation to avoid leaving a global
+    connection open across the process lifetime.
+    """
 
     @classmethod
     def _cursor(cls):
-        """Returns a cursor to the projects cache database, initializing if needed."""
-        if cls._db is None:
-            cls._db = sqlite3.connect(DIRS.user_cache_path / "projects.db", autocommit=True)
-            cursor = cls._db.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS cache (
-                    filename TEXT,
-                    mtime INT,
-                    left INT,
-                    top INT,
-                    right INT,
-                    bottom INT,
-                    PRIMARY KEY (filename)
-                )
-            """)
-        return cls._db.cursor()
+        """Compatibility passthrough to the shared cache DB cursor contextmanager."""
+        return _CACHE_DB.cursor()
 
     @classmethod
     def _reset_table(cls) -> None:
         logger.error("Cache table seems malformed or out of date. Resetting.")
-        cls._cursor().execute("DROP TABLE IF EXISTS cache")
-        cls._db = None  # type: ignore[class-var]
+        _CACHE_DB.reset_table()
 
     def __init__(self, path: Path):
         """Loads cached metadata for the project at `path`."""
@@ -162,9 +152,15 @@ class CachedProjectMetadata(list):
 
     def _load(self) -> list:
         """Loads cached metadata from the database, if valid."""
-        cursor = self._cursor()
-        cursor.execute("SELECT * FROM cache WHERE filename = ? ", (self.key,))
-        row = cursor.fetchone()
+        cm = self._cursor()
+        if hasattr(cm, "__enter__"):
+            with cm as cursor:
+                cursor.execute("SELECT * FROM cache WHERE filename = ? ", (self.key,))
+                row = cursor.fetchone()
+        else:
+            cursor = cm
+            cursor.execute("SELECT * FROM cache WHERE filename = ? ", (self.key,))
+            row = cursor.fetchone()
         if not row:
             return []
         try:
@@ -178,16 +174,27 @@ class CachedProjectMetadata(list):
 
     def __call__(self, rect: Rectangle) -> list:
         """Saves a new cached metadata for this project."""
-        cursor = self._cursor()
-        cursor.execute(
-            "REPLACE INTO cache VALUES (?, ?, ?, ?, ?, ?)",
-            (self.key, self.mtime, rect.left, rect.top, rect.right, rect.bottom),
-        )
+        cm = self._cursor()
+        if hasattr(cm, "__enter__"):
+            with cm as cursor:
+                cursor.execute(
+                    "REPLACE INTO cache VALUES (?, ?, ?, ?, ?, ?)",
+                    (self.key, self.mtime, rect.left, rect.top, rect.right, rect.bottom),
+                )
+        else:
+            cm.execute(
+                "REPLACE INTO cache VALUES (?, ?, ?, ?, ?, ?)",
+                (self.key, self.mtime, rect.left, rect.top, rect.right, rect.bottom),
+            )
         self.clear()
         self.append(rect)
         return self
 
     def forget(self) -> None:
         """Deletes cached metadata for this project."""
-        cursor = self._cursor()
-        cursor.execute("DELETE FROM cache WHERE filename = ?", (self.key,))
+        cm = self._cursor()
+        if hasattr(cm, "__enter__"):
+            with cm as cursor:
+                cursor.execute("DELETE FROM cache WHERE filename = ?", (self.key,))
+        else:
+            cm.execute("DELETE FROM cache WHERE filename = ?", (self.key,))

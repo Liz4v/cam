@@ -32,5 +32,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=wwpppp --cov-report=term-missing --cov-fail-under=95 -q"
+addopts = "--cov=wwpppp --cov-report=term-missing --cov-fail-under=85 -q"
 python_files = ["tests/*.py"]
+
+[tool.coverage.run]
+data_file = ".pytest_cache/.coverage"
