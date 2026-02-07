@@ -3,7 +3,7 @@ from typing import NamedTuple
 
 
 class Tile(NamedTuple):
-    """Represents a tile in 2D lattice space."""
+    """Represents a 1000x1000 tile in 2D lattice space."""
 
     x: int = 0
     y: int = 0

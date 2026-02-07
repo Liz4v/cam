@@ -3,10 +3,9 @@ from pathlib import Path
 
 from loguru import logger
 
-from . import DIRS
 from .geometry import Tile
 from .ingest import has_tile_changed
-from .projects import Project
+from .projects import Project, ProjectShim
 
 
 class Main:
@@ -16,7 +15,7 @@ class Main:
         logger.info(f"Loaded {len(self.projects)} projects.")
         self.tiles = self._load_tiles()
 
-    def _load_tiles(self) -> dict[Tile, set[Project]]:
+    def _load_tiles(self) -> dict[Tile, set[ProjectShim]]:
         """Index tiles to projects for quick lookup."""
         tile_to_project = {}
         for proj in self.projects.values():
@@ -34,36 +33,12 @@ class Main:
 
     def check_projects(self) -> None:
         """Check projects directory for added, modified, or deleted files."""
-        wplace_path = DIRS.user_pictures_path / "wplace"
-        wplace_path.mkdir(parents=True, exist_ok=True)
-
-        # Get current files from disk
-        current_files = {p for p in wplace_path.glob("*.png") if p.is_file()}
+        current_files = Project.scan_directory()
         known_files = set(self.projects.keys())
-
-        # Handle deleted files
-        deleted = known_files - current_files
-        for path in deleted:
-            self.forget_project(path)
-
-        # Handle new and potentially modified files
+        for path in known_files - current_files:
+            self.forget_project(path)  # deleted file
         for path in current_files:
-            if path in deleted:
-                continue
-            # Load/reload all current files to catch modifications
-            if path not in known_files or self._file_modified(path):
-                self.load_project(path)
-
-    def _file_modified(self, path: Path) -> bool:
-        """Check if a project file has been modified since it was loaded."""
-        proj = self.projects.get(path)
-        if not proj:
-            return True
-        try:
-            current_mtime = path.stat().st_mtime
-            return current_mtime != getattr(proj, "mtime", None)
-        except OSError:
-            return True
+            self.maybe_load_project(path)
 
     def run_forever(self) -> None:
         """Run the main polling loop, checking tiles and projects every two minutes."""
@@ -75,7 +50,7 @@ class Main:
                 logger.debug("Checking for project file changes...")
                 self.check_projects()
                 logger.debug("Cycle complete, sleeping for 120 seconds...")
-                time.sleep(127)  # we want a little bit of drift to avoid always hitting the same time on the minute
+                time.sleep(127)  # we want a little bit of drift to avoid resonance
         except KeyboardInterrupt:
             logger.info("Interrupted by user.")
 
@@ -90,18 +65,21 @@ class Main:
                 projs.discard(proj)
                 if not projs:
                     del self.tiles[tile]
-        logger.info(f"{path.name}: Forgot project")
+        if proj.rect.tiles:  # Only log for valid projects
+            logger.info(f"{path.name}: Forgot project")
 
-    def load_project(self, path: Path) -> None:
-        """Loads or reloads a project at the given path."""
+    def maybe_load_project(self, path: Path) -> None:
+        """Checks a potential project file at the given path to see if it needs loading or reloading."""
+        proj = self.projects.get(path)
+        if proj and not proj.has_been_modified():
+            return  # no change
         self.forget_project(path)
         proj = Project.try_open(path)
-        if not proj:
-            return
         self.projects[path] = proj
         for tile in proj.rect.tiles:
             self.tiles.setdefault(tile, set()).add(proj)
-        logger.info(f"{path.name}: Loaded project")
+        if proj.rect:  # Only log for valid projects
+            logger.info(f"{path.name}: Loaded project")
 
 
 def main():

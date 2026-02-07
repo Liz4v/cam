@@ -1,8 +1,6 @@
 import io
-from pathlib import Path
 from types import SimpleNamespace
 
-from wwpppp import DIRS
 from wwpppp.geometry import Point, Rectangle, Size, Tile
 from wwpppp.ingest import has_tile_changed, stitch_tiles
 from wwpppp.palette import PALETTE

@@ -1,7 +1,7 @@
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable, Optional, Self
+from typing import Iterable, Self
 
 from loguru import logger
 from PIL import Image
@@ -14,27 +14,55 @@ from .palette import PALETTE, ColorNotInPalette
 _RE_HAS_COORDS = re.compile(r"[- _](\d+)[- _](\d+)[- _](\d+)[- _](\d+)\.png$", flags=re.IGNORECASE)
 
 
-class Project:
-    """Represents a wplace project stored on disk."""
+class ProjectShim:
+    """Represents a file that may or may not be a valid project."""
 
-    mtime: Optional[float]  # modification time of the project file, used for change detection
+    def __init__(self, path: Path, rect: Rectangle = Rectangle(0, 0, 0, 0)):
+        self.path = path
+        self.rect = rect
+        try:
+            self.mtime = path.stat().st_mtime
+        except OSError:
+            self.mtime = None
+
+    def has_been_modified(self) -> bool:
+        """Check if the file has been modified since it was marked invalid."""
+        try:
+            current_mtime = self.path.stat().st_mtime
+            return current_mtime != self.mtime
+        except OSError:
+            return self.mtime is not None
+
+    def run_diff(self) -> None:
+        """No-op for invalid project files."""
+        pass
+
+
+class Project(ProjectShim):
+    """Represents a wplace project stored on disk that has been validated."""
 
     @classmethod
-    def iter(cls) -> Iterable[Self]:
-        """Yields all valid projects found in the user pictures directory."""
+    def iter(cls) -> Iterable[ProjectShim]:
+        """Yields all projects (valid and invalid) found in the user pictures directory."""
         path = DIRS.user_pictures_path / "wplace"
         path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Searching for projects in {path}")
-        maybe_projects = (cls.try_open(p) for p in sorted(path.iterdir()))
-        return filter(None, maybe_projects)
+        return (cls.try_open(p) for p in sorted(path.iterdir()))
 
     @classmethod
-    def try_open(cls, path: Path) -> Optional[Self]:
-        """Attempts to open a project from the given path. Returns None if invalid."""
+    def scan_directory(cls) -> set[Path]:
+        """Returns the set of PNG files in the user pictures/wplace directory."""
+        path = DIRS.user_pictures_path / "wplace"
+        path.mkdir(parents=True, exist_ok=True)
+        return {p for p in path.glob("*.png") if p.is_file()}
+
+    @classmethod
+    def try_open(cls, path: Path) -> ProjectShim:
+        """Attempts to open a project from the given path. Returns ProjectShim if invalid."""
 
         match = _RE_HAS_COORDS.search(path.name)
         if not match or not path.is_file():
-            return None  # no coords or otherwise invalid/irrelevant
+            return ProjectShim(path)  # no coords or otherwise invalid/irrelevant
 
         try:
             # Convert now, but close immediately. We'll reopen later as needed.
@@ -43,7 +71,7 @@ class Project:
         except ColorNotInPalette as e:
             logger.warning(f"{path.name}: Color not in palette: {e}")
             path.rename(path.with_suffix(".invalid.png"))
-            return None
+            return ProjectShim(path)
         rect = Rectangle.from_point_size(Point.from4(*map(int, match.groups())), size)
 
         logger.info(f"{path.name}: Detected project at {rect}")
@@ -54,13 +82,8 @@ class Project:
 
     def __init__(self, path: Path, rect: Rectangle):
         """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
-        self.path = path
-        self.rect = rect
+        super().__init__(path, rect)
         self._image = None
-        try:
-            self.mtime = path.stat().st_mtime
-        except OSError:
-            self.mtime = None
 
     def __eq__(self, other) -> bool:
         return self.path == getattr(other, "path", ...)

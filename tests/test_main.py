@@ -49,7 +49,7 @@ def test_main_load_and_check_tiles(monkeypatch):
     assert proj_path not in m.projects
 
     # loading project back adds it again
-    m.load_project(proj_path)
+    m.maybe_load_project(proj_path)
     assert proj_path in m.projects
 
 
@@ -76,7 +76,7 @@ def test_main_indexing_and_check_tiles_and_load_forget(tmp_path, monkeypatch):
 
     monkeypatch.setattr(projects.Project, "try_open", classmethod(lambda cls, p: DummyProj(p)))
 
-    m.load_project(path)
+    m.maybe_load_project(path)
     assert path in m.projects
     assert Tile(0, 0) in m.tiles
 
@@ -129,8 +129,8 @@ def test_main_forget_removes_tile_key(monkeypatch):
     assert tile not in m.tiles
 
 
-def test_load_project_none(monkeypatch):
-    """Test that load_project handles None gracefully (invalid project)."""
+def test_maybe_load_project_invalid(monkeypatch):
+    """Test that maybe_load_project handles ProjectShim gracefully."""
 
     # start with no projects
     class FakeProjectClass:
@@ -140,14 +140,16 @@ def test_load_project_none(monkeypatch):
 
         @classmethod
         def try_open(cls, p):
-            return None
+            return projects.ProjectShim(p)
 
     monkeypatch.setattr(main_mod, "Project", FakeProjectClass)
     m = main_mod.Main()
     path = Path("/tmp/nothing.png")
-    # should not raise and not add the project
-    m.load_project(path)
-    assert path not in m.projects
+    # should store the ProjectShim but not index tiles
+    m.maybe_load_project(path)
+    assert path in m.projects
+    assert isinstance(m.projects[path], projects.ProjectShim)
+    assert len(m.tiles) == 0  # No tiles indexed for invalid projects
 
 
 # check_projects tests (file watching)
@@ -160,7 +162,7 @@ def test_check_projects_detects_added_and_deleted(tmp_path, monkeypatch):
 
     # Setup DIRS to point to tmp_path
     monkeypatch.setattr(
-        main_mod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+        projects, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
     )
 
     # Start with no projects
@@ -170,7 +172,7 @@ def test_check_projects_detects_added_and_deleted(tmp_path, monkeypatch):
     # Track calls to load_project and forget_project
     loaded = []
     forgotten = []
-    original_load = m.load_project
+    original_load = m.maybe_load_project
     original_forget = m.forget_project
 
     def track_load(p):
@@ -181,7 +183,7 @@ def test_check_projects_detects_added_and_deleted(tmp_path, monkeypatch):
         forgotten.append(p)
         original_forget(p)
 
-    m.load_project = track_load
+    m.maybe_load_project = track_load
     m.forget_project = track_forget
 
     # Create a new project file
@@ -219,7 +221,7 @@ def test_check_projects_processes_added_and_deleted(tmp_path, monkeypatch):
 
     # Setup DIRS to point to tmp_path
     monkeypatch.setattr(
-        main_mod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+        projects, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
     )
 
     # ensure Project.iter returns empty for deterministic start
@@ -266,7 +268,7 @@ def test_check_projects_handles_modified_files(tmp_path, monkeypatch):
     wplace_dir.mkdir()
 
     monkeypatch.setattr(
-        main_mod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+        projects, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
     )
 
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
@@ -280,6 +282,14 @@ def test_check_projects_handles_modified_files(tmp_path, monkeypatch):
             self.path = path
             self.rect = SimpleNamespace(tiles=frozenset())
             self.mtime = path.stat().st_mtime
+
+        def has_been_modified(self):
+            # Check if file mtime differs from cached mtime
+            try:
+                current = self.path.stat().st_mtime
+                return current != self.mtime
+            except OSError:
+                return True
 
         def run_diff(self):
             pass
@@ -296,13 +306,13 @@ def test_check_projects_handles_modified_files(tmp_path, monkeypatch):
 
     # Track if load_project is called again
     load_called = {"count": 0}
-    original_load = m.load_project
+    original_load = m.maybe_load_project
 
     def track_load(p):
         load_called["count"] += 1
         original_load(p)
 
-    m.load_project = track_load
+    m.maybe_load_project = track_load
 
     # check_projects should detect the modification
     m.check_projects()
@@ -315,7 +325,7 @@ def test_check_projects_skips_deleted_files_in_current_loop(tmp_path, monkeypatc
     wplace_dir.mkdir()
 
     monkeypatch.setattr(
-        main_mod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+        projects, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
     )
 
     # Start with one project already loaded
@@ -346,7 +356,7 @@ def test_check_projects_skips_deleted_files_in_current_loop(tmp_path, monkeypatc
     loaded_called = []
 
     original_forget = m.forget_project
-    original_load = m.load_project
+    original_load = m.maybe_load_project
 
     def track_forget(p):
         forgot_called.append(p)
@@ -357,7 +367,7 @@ def test_check_projects_skips_deleted_files_in_current_loop(tmp_path, monkeypatc
         original_load(p)
 
     m.forget_project = track_forget
-    m.load_project = track_load
+    m.maybe_load_project = track_load
 
     # check_projects should:
     # 1. Forget proj_path (not on disk)
@@ -369,38 +379,6 @@ def test_check_projects_skips_deleted_files_in_current_loop(tmp_path, monkeypatc
     assert other_path in loaded_called
     # proj_path should not be in loaded_called (this tests the "if path in deleted: continue")
     assert proj_path not in loaded_called
-
-
-# _file_modified helper tests
-
-
-def test_file_modified_returns_true_on_oserror(tmp_path, monkeypatch):
-    """Test that _file_modified returns True when stat() raises OSError."""
-    monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
-    m = main_mod.Main()
-
-    proj_path = tmp_path / "nonexistent.png"
-
-    class DummyProj:
-        def __init__(self):
-            self.path = proj_path
-            self.mtime = 12345.0
-
-    m.projects[proj_path] = DummyProj()
-
-    # _file_modified should return True because stat() will fail on nonexistent file
-    assert m._file_modified(proj_path) is True
-
-
-def test_file_modified_returns_true_when_no_project(tmp_path, monkeypatch):
-    """Test that _file_modified returns True when project doesn't exist."""
-    monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
-    m = main_mod.Main()
-
-    proj_path = tmp_path / "notloaded.png"
-
-    # _file_modified should return True because the project isn't loaded
-    assert m._file_modified(proj_path) is True
 
 
 def test_project_init_handles_stat_oserror(tmp_path, monkeypatch):
