@@ -81,7 +81,7 @@ uv run wwpppp
 - Image handling:
   - Use `PALETTE.ensure(image)` for conversion; avoid manually mutating palettes.
   - Always close PIL `Image` objects; prefer `with Image.open(...) as im:` or the helper patterns already present.
-- SQLite cache: use `CachedProjectMetadata` abstraction rather than writing ad-hoc SQL elsewhere.
+- Project state: Projects are discovered from the filesystem on each polling cycle and kept in memory during runtime (metadata only).
 - Error handling: prefer non-fatal logging (warnings/debug) and avoid raising unexpected exceptions in the polling loop.
 
 ## Developer workflow & checks

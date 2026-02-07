@@ -40,7 +40,7 @@ uv run wwpppp
 ### Where data lives
 
 - **Project images:** `<user_pictures_path>/wplace/` — place your project PNGs here
-- **Tile cache:** `<user_cache_path>/wwpppp/` — cached tiles and `projects.db` SQLite database
+- **Tile cache:** `<user_cache_path>/wwpppp/` — cached tiles from WPlace
 
 Platform paths are managed via `platformdirs.PlatformDirs("wwpppp")`.
 
