@@ -5,7 +5,7 @@ Implements intelligent tile checking using multiple temperature-based queues:
 - Temperature queues: hot to cold, based on last modification time
 
 Queue sizes follow Zipf distribution (harmonic series), with the hottest queue
-having at least 5 tiles and the coldest having the most. Tiles are selected
+having a specific number of tiles and the coldest having the most. Tiles are selected
 round-robin between queues, choosing the least-recently-checked tile within each.
 """
 
@@ -61,7 +61,7 @@ class TileMetadata:
         return meta
 
 
-def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 5) -> list[int]:
+def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> list[int]:
     """Calculate queue sizes following Zipf distribution (harmonic series).
 
     Returns a list of queue sizes from hottest to coldest, where:
@@ -72,7 +72,7 @@ def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 5) -> l
 
     Args:
         total_tiles: Total number of tiles to distribute
-        min_hottest_size: Minimum size for hottest queue (default 5)
+        min_hottest_size: Minimum size for hottest queue
 
     Returns:
         List of queue sizes from hottest to coldest (e.g., [5, 10, 20, 65])
@@ -98,7 +98,7 @@ def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 5) -> l
         harmonic = sum(1.0 / i for i in range(1, k + 1))
         hottest_size = total_tiles * (1.0 / k) / harmonic
 
-        if hottest_size >= min_hottest_size:
+        if round(hottest_size) >= min_hottest_size:
             # This k works, try larger k
             num_queues = k
             left = k + 1

@@ -625,3 +625,357 @@ def test_queue_system_no_starvation_with_large_burning_queue(tmp_path, monkeypat
             f"All {burning_tiles_checked} burning tiles were checked before any temperature tiles."
         )
 
+
+def test_tile_metadata_hash_and_eq():
+    """Test TileMetadata __hash__ and __eq__ implementations."""
+    meta1 = TileMetadata(tile=Tile(0, 0), last_checked=100)
+    meta2 = TileMetadata(tile=Tile(0, 0), last_checked=200)
+    meta3 = TileMetadata(tile=Tile(1, 0), last_checked=100)
+
+    # Same tile should be equal even with different timestamps
+    assert meta1 == meta2
+    assert hash(meta1) == hash(meta2)
+
+    # Different tiles should not be equal
+    assert meta1 != meta3
+    assert hash(meta1) != hash(meta3)
+
+    # Should not equal non-TileMetadata objects
+    assert meta1 != "not a metadata"
+    assert meta1 != Tile(0, 0)
+    assert meta1 != None
+    assert meta1 != 123
+
+
+def test_queue_system_current_queue_index_adjustment_burning_only(tmp_path, monkeypatch):
+    """Test that current_queue_index is adjusted when only burning queue exists."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Start with burning tiles only
+    tiles = {Tile(i, 0) for i in range(5)}
+    qs = QueueSystem(tiles)
+
+    # Force current_queue_index to be out of bounds for single-queue scenario
+    qs.current_queue_index = 5  # Way beyond valid range
+
+    # Rebuild should adjust it back to 0
+    qs._rebuild_queues()
+
+    assert qs.current_queue_index == 0
+
+
+def test_queue_system_add_tiles_no_change(tmp_path, monkeypatch):
+    """Test adding tiles that already exist doesn't trigger rebuild."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    tiles = {Tile(0, 0), Tile(1, 0)}
+    qs = QueueSystem(tiles)
+
+    initial_queue_count = len(qs.temperature_queues)
+
+    # Add same tiles again (no-op)
+    qs.add_tiles(tiles)
+
+    # Should not have changed queues
+    assert len(qs.tile_metadata) == 2
+    assert len(qs.temperature_queues) == initial_queue_count
+
+
+def test_queue_system_remove_tiles_no_change(tmp_path, monkeypatch):
+    """Test removing tiles that don't exist doesn't trigger rebuild."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    tiles = {Tile(0, 0), Tile(1, 0)}
+    qs = QueueSystem(tiles)
+
+    initial_queue_count = len(qs.temperature_queues)
+
+    # Remove tiles that don't exist (no-op)
+    non_existent = {Tile(10, 10), Tile(11, 11)}
+    qs.remove_tiles(non_existent)
+
+    # Should not have changed queues
+    assert len(qs.tile_metadata) == 2
+    assert len(qs.temperature_queues) == initial_queue_count
+
+
+def test_queue_system_select_next_empty_system():
+    """Test selecting from queue system with no tiles."""
+    qs = QueueSystem(set())
+
+    result = qs.select_next_tile()
+    assert result is None
+
+
+def test_queue_system_update_unknown_tile(tmp_path, monkeypatch):
+    """Test updating a tile that's not in the system."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    tiles = {Tile(0, 0)}
+    qs = QueueSystem(tiles)
+
+    # Try to update a tile not in the system (should log warning and return)
+    qs.update_tile_after_check(Tile(99, 99), round(time.time()))
+
+    # Should have returned without crashing
+    assert len(qs.tile_metadata) == 1  # Original tile still there
+
+
+def test_reposition_tile_no_temperature_queues(tmp_path, monkeypatch):
+    """Test _reposition_tile when no temperature queues exist."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create a queue system with only burning tiles
+    tiles = {Tile(0, 0), Tile(1, 0)}
+    qs = QueueSystem(tiles)
+
+    # Ensure we only have burning queue
+    assert len(qs.temperature_queues) == 0
+    assert len(qs.burning_queue.tiles) == 2
+
+    # Try to reposition (should return early)
+    meta = qs.burning_queue.tiles[0]
+    qs._reposition_tile(meta)  # Should not crash
+
+    # System should be unchanged
+    assert len(qs.temperature_queues) == 0
+
+
+def test_reposition_tile_not_found_in_queues(tmp_path, monkeypatch):
+    """Test _reposition_tile when tile is not found in any temperature queue."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create tiles with cache
+    tiles = {Tile(i, 0) for i in range(10)}
+    now = round(time.time())
+    for tile in tiles:
+        cache_path = tmp_path / f"tile-{tile}.png"
+        cache_path.write_bytes(b"data")
+        import os
+
+        os.utime(cache_path, (now, now))
+
+    qs = QueueSystem(tiles)
+    initial_temp_tile_count = sum(len(q.tiles) for q in qs.temperature_queues)
+
+    # Get a tile metadata but manually remove it from all queues
+    meta = list(qs.tile_metadata.values())[0]
+    for queue in qs.temperature_queues:
+        queue.remove_tile(meta)
+
+    # Try to reposition (should log warning and return without crashing)
+    qs._reposition_tile(meta)
+
+    # Queue structure should be unchanged
+    final_temp_tile_count = sum(len(q.tiles) for q in qs.temperature_queues)
+    assert final_temp_tile_count == initial_temp_tile_count - 1  # One removed
+
+
+def test_reposition_tile_stays_in_same_queue(tmp_path, monkeypatch):
+    """Test that tile stays in queue when its position doesn't change significantly."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create tiles with graduated modification times
+    tiles = {Tile(i, 0) for i in range(20)}
+    now = round(time.time())
+
+    for i, tile in enumerate(sorted(tiles)):
+        cache_path = tmp_path / f"tile-{tile}.png"
+        cache_path.write_bytes(b"data")
+        import os
+
+        mtime = now - (i * 1000)
+        os.utime(cache_path, (mtime, mtime))
+
+    qs = QueueSystem(tiles)
+
+    # Get a tile from middle of a queue
+    mid_queue = qs.temperature_queues[len(qs.temperature_queues) // 2]
+    original_tile = mid_queue.tiles[0]
+    original_queue_idx = None
+
+    for idx, queue in enumerate(qs.temperature_queues):
+        if original_tile in queue.tiles:
+            original_queue_idx = idx
+            break
+
+    # Don't change modification time significantly
+    # Just reposition without changing anything
+    qs._reposition_tile(original_tile)
+
+    # Tile should still be in same queue (line 294 coverage)
+    assert original_tile in qs.temperature_queues[original_queue_idx].tiles
+
+
+def test_queue_system_all_queues_empty_rebuild(tmp_path, monkeypatch):
+    """Test fallback case when all queues are empty but metadata exists."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    tiles = {Tile(0, 0), Tile(1, 0)}
+    qs = QueueSystem(tiles)
+
+    # Manually empty all queues (corrupt state)
+    qs.burning_queue.tiles.clear()
+    for queue in qs.temperature_queues:
+        queue.tiles.clear()
+
+    # Try to select (should trigger rebuild and log warning)
+    result = qs.select_next_tile()
+
+    # After rebuild, queues should be repopulated
+    total_tiles = len(qs.burning_queue.tiles) + sum(len(q.tiles) for q in qs.temperature_queues)
+    assert total_tiles == 2  # Both tiles should be back in queues
+
+
+def test_calculate_zipf_queue_sizes_fallback(tmp_path, monkeypatch):
+    """Test fallback when calculate_zipf_queue_sizes returns empty (defensive code)."""
+    from unittest.mock import patch
+
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create tiles with cache to get temperature tiles
+    tiles = {Tile(i, 0) for i in range(5)}
+    now = round(time.time())
+    for tile in tiles:
+        cache_path = tmp_path / f"tile-{tile}.png"
+        cache_path.write_bytes(b"data")
+        import os
+
+        os.utime(cache_path, (now, now))
+
+    # Mock calculate_zipf_queue_sizes to return empty list (shouldn't happen normally)
+    with patch("cam.queues.calculate_zipf_queue_sizes", return_value=[]):
+        qs = QueueSystem(tiles)
+
+    # Should have created a single queue with all tiles as fallback
+    assert len(qs.temperature_queues) == 1
+    assert len(qs.temperature_queues[0].tiles) == 5
+
+
+def test_reposition_tile_no_movement_needed(tmp_path, monkeypatch):
+    """Test reposition when tile's position in sorted order matches its current queue."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create tiles with distinct modification times to ensure predictable queue assignment
+    tiles = {Tile(i, 0) for i in range(10)}
+    now = round(time.time())
+
+    # Set mtimes in descending order: Tile(0,0) is newest, Tile(9,0) is oldest
+    for i, tile in enumerate(sorted(tiles)):
+        cache_path = tmp_path / f"tile-{tile}.png"
+        cache_path.write_bytes(b"data")
+        import os
+
+        mtime = now - (i * 1000)
+        os.utime(cache_path, (mtime, mtime))
+
+    qs = QueueSystem(tiles)
+
+    # Get a tile and verify which queue it's in
+    if len(qs.temperature_queues) > 0:
+        # Pick a tile from any queue
+        target_queue_idx = 0
+        if qs.temperature_queues[target_queue_idx].tiles:
+            tile_meta = qs.temperature_queues[target_queue_idx].tiles[0]
+
+            # Try to reposition without changing its modification time
+            # It should stay in the same queue (line 294: early return)
+            qs._reposition_tile(tile_meta)
+
+            # Verify tile is still in same queue
+            assert tile_meta in qs.temperature_queues[target_queue_idx].tiles
+
+
+def test_reposition_with_empty_temperature_queues_explicit(tmp_path, monkeypatch):
+    """Test _reposition_tile explicitly returns early when no temperature queues exist."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create burning tiles (no cache)
+    tiles = {Tile(0, 0)}
+    qs = QueueSystem(tiles)
+
+    # Verify only burning queue exists
+    assert len(qs.burning_queue.tiles) == 1
+    assert len(qs.temperature_queues) == 0
+
+    # Get the burning tile metadata
+    meta = qs.burning_queue.tiles[0]
+
+    # Call _reposition_tile - should return early (line 252)
+    qs._reposition_tile(meta)
+
+    # System should remain unchanged
+    assert len(qs.burning_queue.tiles) == 1
+    assert len(qs.temperature_queues) == 0
+
+
+def test_add_tiles_with_mixed_new_and_existing(tmp_path, monkeypatch):
+    """Test add_tiles with a mix of new and existing tiles."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Start with some tiles
+    initial_tiles = {Tile(0, 0), Tile(1, 0)}
+    qs = QueueSystem(initial_tiles)
+    assert len(qs.tile_metadata) == 2
+
+    # Add a mix: some new, some existing
+    mixed_tiles = {Tile(1, 0), Tile(2, 0), Tile(3, 0)}  # Tile(1,0) already exists
+    qs.add_tiles(mixed_tiles)
+
+    # Should have 4 total tiles (0, 1, 2, 3)
+    assert len(qs.tile_metadata) == 4
+
+    # All tiles should be present
+    assert Tile(0, 0) in qs.tile_metadata
+    assert Tile(1, 0) in qs.tile_metadata
+    assert Tile(2, 0) in qs.tile_metadata
+    assert Tile(3, 0) in qs.tile_metadata
+
+
+def test_reposition_tile_stays_in_queue_explicit(tmp_path, monkeypatch):
+    """Test line 294: tile repositioning where target equals old queue."""
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create enough tiles to have multiple queues with specific modification times
+    tiles = {Tile(i, 0) for i in range(30)}
+    base_time = round(time.time())
+
+    # Create cache files with very close modification times within groups
+    # This ensures tiles stay bunched in their queues even with small changes
+    for i, tile in enumerate(sorted(tiles)):
+        cache_path = tmp_path / f"tile-{tile}.png"
+        cache_path.write_bytes(b"data")
+        import os
+
+        # Group tiles: 0-9 are hottest, 10-19 middle, 20-29 coldest
+        # Within each group, times are very close
+        group = i // 10
+        offset_within_group = i % 10
+        mtime = base_time - (group * 10000) - offset_within_group
+        os.utime(cache_path, (mtime, mtime))
+
+    qs = QueueSystem(tiles)
+
+    # Ensure we have multiple queues
+    if len(qs.temperature_queues) < 2:
+        pytest.skip("Need at least 2 temperature queues for this test")
+
+    # Get a tile from the middle group
+    target_tile = None
+    target_queue_idx = len(qs.temperature_queues) // 2
+    if target_queue_idx < len(qs.temperature_queues) and qs.temperature_queues[target_queue_idx].tiles:
+        target_tile = qs.temperature_queues[target_queue_idx].tiles[0]
+
+    if not target_tile:
+        pytest.skip("Could not find suitable tile for test")
+
+    # Change modification time slightly but not enough to move to different queue
+    # Keep it within the same group by only adjusting by 1
+    old_mtime = target_tile.last_modified
+    target_tile.last_modified = old_mtime + 1  # Tiny change
+
+    # This should trigger the "stays in same queue" path (line 294)
+    qs._reposition_tile(target_tile)
+
+    # Tile should still be in the same queue
+    assert target_tile in qs.temperature_queues[target_queue_idx].tiles

@@ -2,60 +2,7 @@
 
 ## High Priority
 
-### Intelligent tile checking with warm/cold queues
-
-**Status:** Active 🔥
-**Priority:** High
-
-**Description:**
-Instead of simple round-robin tile checking, implement a smarter queue-based system that prioritizes tiles based on activity patterns:
-- "Burning" queue: tiles that have never been downloaded and are part of new projects (special queue, outside temperature hierarchy)
-- Temperature-based queues: an arbitrary number of queues from hottest to coldest
-  - Hottest queue: tiles that have changed most recently
-  - Intermediate queues: tiles in various stages of cooldown
-  - Coldest queue: tiles that haven't changed in a long time
-
-This will allow more responsive monitoring of active areas while still keeping an eye on quieter regions.
-
-**Queue Structure & Distribution:**
-- **Burning queue:** Special queue outside the temperature hierarchy, usually empty except when new projects are added
-- **Temperature queues:** Arbitrary number of queues with Zipf distribution of tile counts
-  - **Zipf distribution:** Coldest queue has the most tiles, each progressively hotter queue has fewer tiles
-  - **Minimum hottest queue size:** At least 5 tiles (unless it's the only non-burning queue)
-  - **Example distribution (4 temperature queues, 100 total tiles):**
-    - Hottest: 5 tiles
-    - Hotter: 13 tiles  
-    - Cooler: 25 tiles
-    - Coldest: 57 tiles
-
-**Queue Selection Criteria:**
-- **Between queues:** Round-robin rotation through all queues (Burning → Hottest → ... → Coldest → repeat), skipping empty queues
-  - Note: The burning queue will usually be empty except when new projects are added
-- **Queue membership:** Determined by tile's last modification time
-  - More recent modifications → hotter queues
-  - Older modifications → cooler queues
-  - Brand new tiles (never downloaded) → burning queue
-- **Within each queue:** Select tile with the oldest "last checked" timestamp
-  - This ensures fair coverage within each activity level
-
-**Implementation Requirements:**
-- Should still respect the one-tile-per-cycle constraint
-- Maintain timestamps for: last modification time, last check time (per tile)
-- Calculate queue boundaries dynamically to achieve Zipf distribution of tile counts
-- Handle queue rotation with graceful skipping of empty queues
-- Support configurable number of temperature queues
-- Implement decay mechanisms for moving tiles between queues based on time since last modification
-
-**Implementation Details:**
-1. **Number of temperature queues:** Calculate dynamically to maximize queues while keeping hottest queue ≥ 5 tiles and maintaining good Zipf approximation
-2. **Zipf distribution calculation:** Use harmonic series approach (queue i gets tile count proportional to 1/i)
-3. **Queue boundary updates:** Recalculate only when necessary:
-   - When project tile mapping changes (projects added/removed/modified)
-   - When the tile checked in current cycle causes queue movement (modification time changed, moving it between queues)
-     - If a tile moves to a hotter queue, cascade tiles down to cooler queues to maintain target Zipf distribution sizes
-   - Otherwise, skip recalculation to avoid unnecessary overhead
-4. **Burning queue graduation:** Tiles leave burning queue after first successful check; server provides last modification timestamp
-5. **Startup behavior:** Read existing disk cache with modification metadata; assign cached tiles to temperature queues using regular criteria (no special initialization)
+_No active high priority tasks._
 
 ---
 
@@ -82,6 +29,12 @@ When project progress changes are detected, analyze whether the change represent
 ---
 
 ## Completed
+
+> **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
+
+### ✅ Intelligent tile checking with warm/cold queues (2026-02-07)
+
+Implemented temperature-based queue system with Zipf distribution for intelligent tile monitoring: burning queue for never-checked tiles, multiple hot-to-cold temperature queues based on modification times, round-robin selection across queues choosing least-recently-checked tiles, and surgical repositioning with cascade mechanics when tiles move to hotter queues. Includes 23 comprehensive tests and integration with `TileChecker`.
 
 ### ✅ Fix tile polling - only check ONE tile per cycle (2026-02-07)
 

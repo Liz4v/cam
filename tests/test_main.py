@@ -409,15 +409,15 @@ def test_run_forever_handles_keyboard_interrupt(monkeypatch):
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
     m = main_mod.Main()
 
-    # Make check_tiles and check_projects raise KeyboardInterrupt after first call
+    # Make check_next_tile raise KeyboardInterrupt after first call
     call_count = {"count": 0}
 
-    def fake_check_tiles():
+    def fake_check_next_tile():
         call_count["count"] += 1
         if call_count["count"] > 0:
             raise KeyboardInterrupt
 
-    m.check_tiles = fake_check_tiles
+    m.tile_checker.check_next_tile = fake_check_next_tile
     m.check_projects = lambda: None
 
     # run_forever should catch KeyboardInterrupt and exit gracefully
@@ -589,5 +589,3 @@ def test_main_check_tiles_empty_tiles(monkeypatch):
     # Should not crash when no tiles exist
     m.tile_checker.check_next_tile()
     assert len(m.tile_checker.queue_system.tile_metadata) == 0  # Should remain empty
-
-
