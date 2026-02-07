@@ -1,5 +1,3 @@
-Also read [local-instructions.md](local-instructions.md) for per-workspace instructions.
-
 **Project Overview**
 
 wwpppp is a small watcher for WPlace paint projects. It polls WPlace tile images, stitches cached tiles, and diffs them against project image files a user places in their platform pictures folder. The package entry point is exposed as the console script `wwpppp` (see `pyproject.toml`).
@@ -12,9 +10,9 @@ wwpppp is a small watcher for WPlace paint projects. It polls WPlace tile images
 - **Linting:** `ruff` configured with `line-length = 120`
 
 **Quickstart (developer)**
-- Use `uv` to manage Python and project dependencies. Example:
-
 See the `uv` documentation: https://pypi.org/project/uv/
+
+- Use `uv` to manage Python and project dependencies. Example:
 
 ```powershell
 uv sync
@@ -58,10 +56,11 @@ uv run wwpppp
 **Developer workflow & checks**
 - Linting: run `ruff` (project defines `line-length = 120`).
 - Formatting: no explicit formatter in repo; follow current style and ruff suggestions.
-- Tests: there are no tests included. Add unit tests under a `tests/` folder if you add logic to be verified. Focus tests on `geometry`, `palette.lookup`, and `projects` diff logic.
- - Tests: unit tests live under `tests/`. We use `pytest` with `pytest-cov` for coverage.
-   - Coverage is configured in `pyproject.toml` under `[tool.pytest.ini_options]`.
-   - The project enforces a coverage threshold for all modules.
+- Tests: unit tests live under `tests/`. We use `pytest` with `pytest-cov` for coverage.
+  - Coverage is configured in `pyproject.toml` under `[tool.pytest.ini_options]`.
+  - The project enforces a coverage threshold for all modules.
+  - Focus tests on `geometry`, `palette.lookup`, and `projects` diff logic.
+  - Run tests: `uv run pytest`
 
 **Running and debugging**
 - To debug tile fetching behavior, call `has_tile_changed()` directly with a `Tile` object in an interactive script and observe `DIRS.user_cache_path` for generated `tile-*.png` files.
@@ -74,7 +73,8 @@ uv run wwpppp
 - Prefer explicit, type-annotated functions and small helper functions over large refactors.
 
 **Packaging & distribution**
-- `pyproject.toml` contains project metadata and the console script entry point. Install via `pip install -e .` during development.
+- `pyproject.toml` contains project metadata and the console script entry point.
+- Use `uv sync` for dependency management and installation.
 
 **Safety & Resource constraints**
 - Network I/O is used in `ingest.has_tile_changed`. Keep short timeouts and avoid unbounded parallel downloads.
@@ -82,8 +82,6 @@ uv run wwpppp
 
 **Where to look for further context**
 - `pyproject.toml` for packaging/deps and `ruff` config
-- `README.md` for relevant external resources/links
-
-If you want, I can also:
-- add a minimal `tests/` scaffold and a couple of unit tests,
-- add a `CONTRIBUTING.md` with commit/message conventions.
+- `README.md` for user-facing documentation and external resources/links
+- `tests/` for unit tests and test patterns
+- [local-instructions.md](local-instructions.md) for instructions regarding user conversation and the development environment
