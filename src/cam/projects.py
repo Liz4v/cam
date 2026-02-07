@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Iterable
 
 from loguru import logger
-from PIL import Image
 
 from . import DIRS
 from .geometry import Point, Rectangle, Size
@@ -96,7 +95,6 @@ class Project(ProjectShim):
     def __init__(self, path: Path, rect: Rectangle):
         """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
         super().__init__(path, rect)
-        self._image: Image.Image | None = None
 
     def __eq__(self, other) -> bool:
         return self.path == getattr(other, "path", ...)
@@ -104,51 +102,32 @@ class Project(ProjectShim):
     def __hash__(self):
         return hash(self.path)
 
-    @property
-    def image(self) -> Image.Image:
-        """The target image for this project, lazy-opened as a PIL Image."""
-        if self._image is None:
-            self._image = PALETTE.open_image(self.path)
-        return self._image
-
-    @image.deleter
-    def image(self):
-        """Closes the cached image."""
-        if self._image is not None:
-            self._image.close()
-            self._image = None
-
-    def __del__(self):
-        try:
-            del self.image
-        except Exception:
-            pass
-
     def run_diff(self) -> None:
         """Compares each pixel between both images. Generates a new image only with the differences."""
 
-        target_data = self.image.get_flattened_data()
-        assert target_data is not None, "Image must have data"
-        with stitch_tiles(self.rect) as current:
-            current_data = current.get_flattened_data()
-            assert current_data is not None, "Image must have data"
-            newdata = map(pixel_compare, current_data, target_data)  # type: ignore[arg-type]
-            remaining = bytes(newdata)
+        with PALETTE.open_image(self.path) as target:
+            target_data = target.get_flattened_data()
+            assert target_data is not None, "Image must have data"
+            with stitch_tiles(self.rect) as current:
+                current_data = current.get_flattened_data()
+                assert current_data is not None, "Image must have data"
+                newdata = map(pixel_compare, current_data, target_data)  # type: ignore[arg-type]
+                remaining = bytes(newdata)
 
-        if remaining == target_data:
-            return  # project is not started, no need for diffs
+            if remaining == target_data:
+                return  # project is not started, no need for diffs
 
-        if max(remaining) == 0:
-            logger.info(f"{self.path.name}: Complete.")
-            return
+            if max(remaining) == 0:
+                logger.info(f"{self.path.name}: Complete.")
+                return
 
-        num_remaining = sum(1 for v in remaining if v)
-        num_target = sum(1 for v in target_data if v) or 1  # avoid div by 0
-        percentage = num_remaining * 100 / num_target
-        time_to_go = timedelta(seconds=27) * num_remaining
-        days, hours = divmod(round(time_to_go.total_seconds() / 3600), 24)
-        when = (datetime.now() + time_to_go).strftime("%b %d %H:%M")
-        logger.info(f"{self.path.name} remaining: {num_remaining}px, {percentage:.2f}%, {days}d{hours}h to {when}.")
+            num_remaining = sum(1 for v in remaining if v)
+            num_target = sum(1 for v in target_data if v) or 1  # avoid div by 0
+            percentage = num_remaining * 100 / num_target
+            time_to_go = timedelta(seconds=27) * num_remaining
+            days, hours = divmod(round(time_to_go.total_seconds() / 3600), 24)
+            when = (datetime.now() + time_to_go).strftime("%b %d %H:%M")
+            logger.info(f"{self.path.name} remaining: {num_remaining}px, {percentage:.2f}%, {days}d{hours}h to {when}.")
 
 
 def pixel_compare(current: int, desired: int) -> int:

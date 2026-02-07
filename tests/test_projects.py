@@ -91,7 +91,6 @@ def test_run_diff_branches(monkeypatch, tmp_path):
 
     # Case 1: no change (current == target)
     target = bytes([1, 2, 3])
-    proj._image = DummyImage(target)
 
     class CM:
         def __init__(self, data):
@@ -106,11 +105,12 @@ def test_run_diff_branches(monkeypatch, tmp_path):
         def get_flattened_data(self):
             return self.data
 
+    monkeypatch.setattr(PALETTE, "open_image", lambda path: CM(target))
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: CM(target))
     proj.run_diff()  # should early-return without error
 
     # Case 2: progress branch (different data)
-    proj._image = DummyImage(bytes([0, 1, 2]))
+    monkeypatch.setattr(PALETTE, "open_image", lambda path: CM(bytes([0, 1, 2])))
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: CM(bytes([2, 3, 4])))
     proj.run_diff()  # should run through progress logging
 
@@ -126,32 +126,16 @@ def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
     p = projects.Project(proj_path, rect)
 
     target = _paletted_image((4, 4), value=1)
-    p._image = target
 
     # Case: current equals target -> complete branch
+    monkeypatch.setattr(PALETTE, "open_image", lambda path: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((4, 4), value=1))
     p.run_diff()  # should hit the 'Complete.' branch without error
 
     # Case: current different -> remaining/progress calculation path
+    monkeypatch.setattr(PALETTE, "open_image", lambda path: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((4, 4), value=0))
     p.run_diff()  # should compute remaining and log progress without error
-
-
-# Project property tests
-
-
-def test_project_image_property(tmp_path):
-    """Test the image property opens/closes correctly."""
-    # write an actual paletted file and exercise image property open and close
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=2)
-    im.save(path)
-
-    rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    p = projects.Project(path, rect)
-    img = p.image
-    assert img.mode == "P"
-    del p.image
 
 
 # ProjectShim tests
@@ -359,16 +343,13 @@ def test_project_equality_and_hash(tmp_path):
 
 
 def test_project_deletion(tmp_path):
-    """Test Project __del__ method closes image."""
+    """Test Project deletion does not raise."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
     proj = projects.Project(path, rect)
-
-    # Access image to open it
-    _ = proj.image
 
     # Delete the project - should not raise
     del proj
