@@ -36,19 +36,12 @@ class Main:
         for path in current_files:
             self.maybe_load_project(path)
 
-    def run_forever(self) -> None:
-        """Run the main polling loop, checking tiles and projects every ~97 seconds (60φ)."""
-        logger.info(f"Starting polling loop ({POLLING_CYCLE_SECONDS:.1f}s cycle, 60φ = 30(1+√5))...")
-        try:
-            while True:
-                logger.debug("Checking for tile updates...")
-                self.tile_checker.check_next_tile()
-                logger.debug("Checking for project file changes...")
-                self.check_projects()
-                logger.debug(f"Cycle complete, sleeping for {POLLING_CYCLE_SECONDS:.1f} seconds...")
-                time.sleep(POLLING_CYCLE_SECONDS)
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user.")
+    def poll_once(self) -> None:
+        """Run a cycle of the main polling loop."""
+        logger.debug("Checking for project file changes...")
+        self.check_projects()
+        logger.debug("Checking for tile updates...")
+        self.tile_checker.check_next_tile()
 
     def forget_project(self, path: Path) -> None:
         """Clears cached data about the project at the given path."""
@@ -75,8 +68,24 @@ class Main:
 def main():
     """Main entry point for cam (Canvas Activity Monitor)."""
     worker = Main()
-    worker.run_forever()
-    logger.info("Exiting.")
+    consecutive_errors = 0
+    logger.info(f"Starting polling loop ({POLLING_CYCLE_SECONDS:.1f}s cycle, 60φ = 30(1+√5))...")
+    while True:
+        try:
+            worker.poll_once()
+            consecutive_errors = 0  # Reset on success
+        except Exception as e:
+            consecutive_errors += 1
+            logger.error(f"Error during polling cycle: {e} (consecutive errors: {consecutive_errors})")
+            if consecutive_errors >= 3:
+                logger.critical("Three consecutive errors encountered. Exiting.")
+                raise
+        logger.debug(f"Cycle complete, sleeping for {POLLING_CYCLE_SECONDS:.1f} seconds...")
+        try:
+            time.sleep(POLLING_CYCLE_SECONDS)
+        except KeyboardInterrupt:
+            logger.info("Exiting due to user interrupt.")
+            return
 
 
 if __name__ == "__main__":

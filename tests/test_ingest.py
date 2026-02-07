@@ -42,31 +42,6 @@ def test_has_tile_changed_bad_image(monkeypatch, tmp_path):
     assert last_modified == 0
 
 
-def test_has_tile_changed_no_change_and_change(monkeypatch, tmp_path):
-    monkeypatch.setattr("cam.ingest.DIRS", SimpleNamespace(user_cache_path=tmp_path, user_pictures_path=tmp_path))
-    png = _paletted_png_bytes()
-
-    class Resp:
-        status_code = 200
-        content = png
-        headers = {}
-
-    monkeypatch.setattr("cam.ingest.requests.get", lambda *a, **k: Resp())
-
-    # create existing identical cache -> no change
-    cache_path = tmp_path / "tile-0_0.png"
-    cache_path.write_bytes(png)
-    changed, last_modified = has_tile_changed(Tile(0, 0))
-    assert not changed
-    assert last_modified > 0  # Should return existing cache mtime
-
-    # remove cache -> change detected and file created
-    cache_path.unlink()
-    changed, last_modified = has_tile_changed(Tile(0, 0))
-    assert changed
-    assert cache_path.exists()
-
-
 def test_has_tile_changed_sets_mtime_from_last_modified(monkeypatch, tmp_path):
     monkeypatch.setattr("cam.ingest.DIRS", SimpleNamespace(user_cache_path=tmp_path, user_pictures_path=tmp_path))
     png = _paletted_png_bytes()

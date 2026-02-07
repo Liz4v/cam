@@ -42,17 +42,15 @@ def has_tile_changed(tile: Tile) -> tuple[bool, int]:
     # Check for cached tile and prepare If-Modified-Since header
     cache_path = DIRS.user_cache_path / f"tile-{tile}.png"
     headers = {}
+    mtime = 0
     if cache_path.exists():
-        mtime = cache_path.stat().st_mtime
+        mtime = round(cache_path.stat().st_mtime)
         headers["If-Modified-Since"] = formatdate(mtime, usegmt=True)
 
     response = requests.get(url, headers=headers, timeout=5)
 
-    # Handle 304 Not Modified - extract Last-Modified from cache file
-    if response.status_code == 304:
-        logger.info(f"Tile {tile}: Not modified (304).")
-        last_modified = round(cache_path.stat().st_mtime) if cache_path.exists() else 0
-        return False, last_modified
+    if response.status_code == 304:  # Not Modified
+        return False, mtime
 
     if response.status_code != 200:
         logger.debug(f"Tile {tile}: HTTP {response.status_code}")
@@ -73,16 +71,10 @@ def has_tile_changed(tile: Tile) -> tuple[bool, int]:
     except Exception as e:
         logger.debug(f"Tile {tile}: image decode failed: {e}")
         return False, 0
+
     # ensure() may close img and return new image, or return img unchanged.
     # Either way, the with statement ensures the result gets closed at block end.
     with PALETTE.ensure(img) as paletted:
-        if cache_path.exists():
-            with Image.open(cache_path) as cached:
-                if bytes(cached.tobytes()) == bytes(paletted.tobytes()):
-                    logger.info(f"Tile {tile}: No change detected.")
-                    # Return the existing file's mtime since content didn't change
-                    existing_mtime = round(cache_path.stat().st_mtime)
-                    return False, existing_mtime
         logger.info(f"Tile {tile}: Change detected, updating cache...")
         paletted.save(cache_path)
 

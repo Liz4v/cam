@@ -168,6 +168,10 @@ class TileQueue:
         if tile_meta not in self.tiles:
             self.tiles.append(tile_meta)
 
+    def __str__(self) -> str:
+        descr = "burning" if self.temperature == -1 else f"temp={self.temperature}"
+        return f"{descr} queue ({len(self.tiles)} tiles)"
+
 
 class QueueSystem:
     """Manages temperature-based tile queues with Zipf distribution.
@@ -370,9 +374,9 @@ class QueueSystem:
             if not queue.is_empty():
                 tile_meta = queue.select_next()
                 if tile_meta:
+                    logger.debug(f"Examining tile {tile_meta.tile} from {queue}")
                     return tile_meta
 
-        # All queues empty (shouldn't happen if tile_metadata is not empty)
         logger.warning("All queues empty but tile_metadata not empty - rebuilding")
         self._rebuild_queues()
         return None

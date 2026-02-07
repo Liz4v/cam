@@ -401,33 +401,39 @@ def test_project_init_handles_stat_oserror(tmp_path, monkeypatch):
     assert proj.mtime is None
 
 
-# run_forever and main() tests
+# main() function tests
 
 
-def test_run_forever_handles_keyboard_interrupt(monkeypatch):
-    """Test that run_forever handles KeyboardInterrupt gracefully."""
+def test_main_handles_keyboard_interrupt_during_sleep(monkeypatch):
+    """Test that main() handles KeyboardInterrupt during sleep gracefully."""
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
-    m = main_mod.Main()
 
-    # Make check_next_tile raise KeyboardInterrupt after first call
-    call_count = {"count": 0}
+    cycle_count = {"count": 0}
 
-    def fake_check_next_tile():
-        call_count["count"] += 1
-        if call_count["count"] > 0:
-            raise KeyboardInterrupt
+    def mock_sleep(seconds):
+        # Interrupt after first sleep
+        raise KeyboardInterrupt
 
-    m.tile_checker.check_next_tile = fake_check_next_tile
-    m.check_projects = lambda: None
+    monkeypatch.setattr(time, "sleep", mock_sleep)
 
-    # run_forever should catch KeyboardInterrupt and exit gracefully
-    m.run_forever()  # Should not raise
+    original_main_class = main_mod.Main
+
+    class FakeMain(original_main_class):
+        def poll_once(self):
+            cycle_count["count"] += 1
+
+    monkeypatch.setattr(main_mod, "Main", FakeMain)
+
+    # main() should catch KeyboardInterrupt and exit gracefully
+    main_mod.main()  # Should not raise
+
+    # Should have completed one cycle before interrupt
+    assert cycle_count["count"] >= 1
 
 
-def test_run_forever_sleeps_and_loops(monkeypatch):
-    """Test that run_forever sleeps between cycles and can be interrupted."""
+def test_main_sleeps_and_loops(monkeypatch):
+    """Test that main() sleeps between cycles and can be interrupted."""
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
-    m = main_mod.Main()
 
     sleep_calls = []
     cycle_count = {"count": 0}
@@ -439,28 +445,27 @@ def test_run_forever_sleeps_and_loops(monkeypatch):
 
     monkeypatch.setattr(time, "sleep", mock_sleep)
 
-    def mock_check_next_tile():
-        cycle_count["count"] += 1
+    original_main_class = main_mod.Main
 
-    def mock_check_projects():
-        pass
+    class FakeMain(original_main_class):
+        def poll_once(self):
+            cycle_count["count"] += 1
 
-    m.tile_checker.check_next_tile = mock_check_next_tile
-    m.check_projects = mock_check_projects
+    monkeypatch.setattr(main_mod, "Main", FakeMain)
 
-    # run_forever should loop, call check methods, sleep, then be interrupted
-    m.run_forever()
+    # main() should loop, call poll_once, sleep, then be interrupted
+    main_mod.main()
 
-    # Should have called check_next_tile once and tried to sleep
+    # Should have called poll_once once and tried to sleep
     assert cycle_count["count"] >= 1
     assert len(sleep_calls) == 1
     # 60φ = 30(1 + √5) ≈ 97.08 seconds
     assert sleep_calls[0] == 30 * (1 + 5**0.5)
 
 
-def test_main_function_calls_run_forever(monkeypatch):
-    """Test that the main() function creates Main and calls run_forever."""
-    called = {"init": False, "run": False}
+def test_main_function_creates_main_and_loops(monkeypatch):
+    """Test that the main() function creates Main instance and runs polling loop."""
+    called = {"init": False, "poll": 0}
 
     # Monkeypatch Project.iter to avoid real initialization
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
@@ -472,18 +477,23 @@ def test_main_function_calls_run_forever(monkeypatch):
             called["init"] = True
             super().__init__()
 
-        def run_forever(self):
-            called["run"] = True
-            # Don't actually run forever, just mark as called
-            return
+        def poll_once(self):
+            called["poll"] += 1
 
     monkeypatch.setattr(main_mod, "Main", FakeMain)
 
-    # Call main() - should create Main and call run_forever
+    # Mock sleep to raise KeyboardInterrupt after first call
+    def mock_sleep(s):
+        if called["poll"] >= 1:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", mock_sleep)
+
+    # Call main() - should create Main and call poll_once
     main_mod.main()
 
     assert called["init"] is True
-    assert called["run"] is True
+    assert called["poll"] >= 1
 
 
 # Stitch tiles integration test
@@ -521,7 +531,7 @@ def test_palette_lookup_transparent_and_ensure():
 
 
 def test_main_check_tiles_round_robin(monkeypatch):
-    """Test that check_tiles only checks one tile per cycle in round-robin fashion."""
+    """Test that check_next_tile only checks one tile per cycle in round-robin fashion."""
 
     # Create fake projects covering three different tiles
     class FakeProj:
@@ -589,3 +599,88 @@ def test_main_check_tiles_empty_tiles(monkeypatch):
     # Should not crash when no tiles exist
     m.tile_checker.check_next_tile()
     assert len(m.tile_checker.queue_system.tile_metadata) == 0  # Should remain empty
+
+
+def test_poll_once_checks_projects_before_tiles(monkeypatch):
+    """Test that poll_once() checks projects before tiles (inverted order)."""
+    monkeypatch.setattr("cam.main.Project.iter", classmethod(lambda cls: []))
+
+    m = main_mod.Main()
+
+    call_order = []
+
+    original_check_projects = m.check_projects
+    original_check_next_tile = m.tile_checker.check_next_tile
+
+    def track_check_projects():
+        call_order.append("projects")
+        original_check_projects()
+
+    def track_check_next_tile():
+        call_order.append("tiles")
+        original_check_next_tile()
+
+    m.check_projects = track_check_projects
+    m.tile_checker.check_next_tile = track_check_next_tile
+
+    # Call poll_once
+    m.poll_once()
+
+    # Verify projects are checked before tiles
+    assert call_order == ["projects", "tiles"], f"Expected ['projects', 'tiles'], got {call_order}"
+
+
+def test_main_handles_consecutive_errors(monkeypatch):
+    """Test that main() exits after three consecutive errors."""
+    monkeypatch.setattr("cam.main.Project.iter", classmethod(lambda cls: []))
+
+    error_count = {"count": 0}
+
+    original_main_class = main_mod.Main
+
+    class FakeMain(original_main_class):
+        def poll_once(self):
+            error_count["count"] += 1
+            raise RuntimeError("Test error")
+
+    monkeypatch.setattr(main_mod, "Main", FakeMain)
+    # Don't actually sleep
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+
+    # main() should raise after 3 consecutive errors
+    try:
+        main_mod.main()
+        assert False, "Expected main() to raise after 3 consecutive errors"
+    except RuntimeError:
+        # Expected - should have failed after 3 errors
+        assert error_count["count"] == 3
+
+
+def test_main_resets_error_count_on_success(monkeypatch):
+    """Test that main() resets consecutive error count after a successful cycle."""
+    monkeypatch.setattr("cam.main.Project.iter", classmethod(lambda cls: []))
+
+    cycle_count = {"count": 0}
+
+    original_main_class = main_mod.Main
+
+    class FakeMain(original_main_class):
+        def poll_once(self):
+            cycle_count["count"] += 1
+            # Fail twice, succeed once, then fail twice again, then succeed
+            if cycle_count["count"] in [1, 2, 4, 5]:
+                raise RuntimeError("Test error")
+            # On cycles 3 and 6, succeed
+
+    monkeypatch.setattr(main_mod, "Main", FakeMain)
+
+    # Mock sleep to exit after 6 cycles
+    def mock_sleep(s):
+        if cycle_count["count"] >= 6:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", mock_sleep)
+
+    # main() should not crash since errors are interspersed with successes
+    main_mod.main()  # Should exit gracefully via KeyboardInterrupt
+    assert cycle_count["count"] == 6
