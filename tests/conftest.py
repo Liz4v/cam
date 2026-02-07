@@ -2,6 +2,6 @@ import pytest
 
 
 @pytest.fixture(scope="session", autouse=True)
-def close_cache_db_at_end():
-    """No teardown required; DB connections are short-lived."""
+def session_setup():
+    """Session-level setup fixture."""
     yield

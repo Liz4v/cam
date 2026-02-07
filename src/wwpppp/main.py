@@ -90,7 +90,6 @@ class Main:
                 projs.discard(proj)
                 if not projs:
                     del self.tiles[tile]
-        proj.forget()
         logger.info(f"{path.name}: Forgot project")
 
     def load_project(self, path: Path) -> None:
@@ -100,11 +99,6 @@ class Main:
         if not proj:
             return
         self.projects[path] = proj
-        # Store modification time for change detection
-        try:
-            proj.mtime = path.stat().st_mtime
-        except OSError:
-            proj.mtime = None
         for tile in proj.rect.tiles:
             self.tiles.setdefault(tile, set()).add(proj)
         logger.info(f"{path.name}: Loaded project")
