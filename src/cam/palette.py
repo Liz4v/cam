@@ -55,11 +55,16 @@ class Palette:
         - If no conversion needed: returns `image` unchanged (caller still owns it)
         - If conversion needed: closes `image` and returns a new Image (caller owns new image)
         """
-        if image.mode == "P" and bytes(image.getpalette()) == self._raw:  # type: ignore[attr-defined]
-            return image  # Already correct palette, return as-is (still caller's responsibility to close)
+        if image.mode == "P":
+            palette = image.getpalette()
+            assert palette is not None, "Paletted image must have a palette"
+            if bytes(palette) == self._raw:
+                return image  # Already correct palette, return as-is (still caller's responsibility to close)
         size = image.size
         with _ensure_rgba(image) as rgba:  # Closes input `image` at end of this block
-            data = bytes(map(self.lookup, rgba.get_flattened_data()))  # type: ignore[misc]
+            flattened = rgba.get_flattened_data()
+            assert flattened is not None, "Image must have data"
+            data = bytes(map(self.lookup, flattened))  # type: ignore[arg-type]
         # Input image now closed, create new paletted image
         image = self.new(size)
         image.putdata(data)

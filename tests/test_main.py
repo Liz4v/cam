@@ -398,7 +398,7 @@ def test_project_init_handles_stat_oserror(tmp_path, monkeypatch):
 
     # Project.__init__ should handle the OSError and set mtime to None
     proj = projects.Project(proj_path, rect)
-    assert proj.mtime is None
+    assert proj.mtime == 0
 
 
 # main() function tests

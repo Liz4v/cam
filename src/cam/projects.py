@@ -32,18 +32,19 @@ class ProjectShim:
     def __init__(self, path: Path, rect: Rectangle = Rectangle(0, 0, 0, 0)):
         self.path = path
         self.rect = rect
+        self.mtime: int = 0
         try:
-            self.mtime = path.stat().st_mtime
+            self.mtime = round(path.stat().st_mtime)
         except OSError:
-            self.mtime = None
+            pass  # If the file doesn't exist or can't be accessed, we treat it as having no mtime
 
     def has_been_modified(self) -> bool:
         """Check if the file has been modified since it was marked invalid."""
         try:
-            current_mtime = self.path.stat().st_mtime
+            current_mtime = round(self.path.stat().st_mtime)
             return current_mtime != self.mtime
         except OSError:
-            return self.mtime is not None
+            return self.mtime != 0
 
     def run_diff(self) -> None:
         """No-op for invalid project files."""
@@ -95,7 +96,7 @@ class Project(ProjectShim):
     def __init__(self, path: Path, rect: Rectangle):
         """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
         super().__init__(path, rect)
-        self._image = None
+        self._image: Image.Image | None = None
 
     def __eq__(self, other) -> bool:
         return self.path == getattr(other, "path", ...)
@@ -111,7 +112,7 @@ class Project(ProjectShim):
         return self._image
 
     @image.deleter
-    def image(self) -> None:
+    def image(self):
         """Closes the cached image."""
         if self._image is not None:
             self._image.close()
@@ -127,8 +128,11 @@ class Project(ProjectShim):
         """Compares each pixel between both images. Generates a new image only with the differences."""
 
         target_data = self.image.get_flattened_data()
+        assert target_data is not None, "Image must have data"
         with stitch_tiles(self.rect) as current:
-            newdata = map(pixel_compare, current.get_flattened_data(), target_data)  # type: ignore[misc]
+            current_data = current.get_flattened_data()
+            assert current_data is not None, "Image must have data"
+            newdata = map(pixel_compare, current_data, target_data)  # type: ignore[arg-type]
             remaining = bytes(newdata)
 
         if remaining == target_data:

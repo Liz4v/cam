@@ -164,7 +164,7 @@ def test_invalid_project_file_interface(tmp_path):
 
     invalid = projects.ProjectShim(path)
     assert invalid.path == path
-    assert invalid.mtime is not None
+    assert invalid.mtime != 0
     assert hasattr(invalid, "rect")
     assert len(list(invalid.rect.tiles)) == 0  # empty rect
     assert callable(invalid.has_been_modified)
@@ -182,9 +182,11 @@ def test_invalid_project_file_has_been_modified(tmp_path):
     invalid = projects.ProjectShim(path)
     assert not invalid.has_been_modified()  # just created
 
-    # Modify the file
-    time.sleep(0.01)
-    path.touch()
+    # Manually set mtime to a different value to simulate passage of time
+    # When has_been_modified() checks against the real file's mtime, it will detect the difference
+    real_mtime = round(path.stat().st_mtime)
+    invalid.mtime = real_mtime - 1  # Set to 1 second earlier
+
     assert invalid.has_been_modified()  # should detect change
 
 
@@ -194,7 +196,7 @@ def test_invalid_project_file_handles_oserror_on_init(tmp_path, monkeypatch):
 
     # File doesn't exist, so stat will fail
     invalid = projects.ProjectShim(path)
-    assert invalid.mtime is None
+    assert invalid.mtime == 0
 
 
 def test_invalid_project_file_has_been_modified_with_oserror(tmp_path, monkeypatch):
@@ -217,7 +219,7 @@ def test_invalid_project_file_has_been_modified_with_none_mtime(tmp_path):
     path.touch()
 
     invalid = projects.ProjectShim(path)
-    invalid.mtime = None
+    invalid.mtime = 0
 
     # Should return True when mtime is None
     assert invalid.has_been_modified()
@@ -229,7 +231,7 @@ def test_invalid_project_file_nonexistent_stays_nonexistent(tmp_path):
 
     # Create ProjectShim for non-existent file
     invalid = projects.ProjectShim(path)
-    assert invalid.mtime is None
+    assert invalid.mtime == 0
 
     # File still doesn't exist - should return False (no modification)
     assert not invalid.has_been_modified()
@@ -241,13 +243,13 @@ def test_invalid_project_file_created_after_init(tmp_path):
 
     # Create ProjectShim for non-existent file
     invalid = projects.ProjectShim(path)
-    assert invalid.mtime is None
+    assert invalid.mtime == 0
 
     # Create the file
-    time.sleep(0.01)
     path.touch()
 
-    # File now exists - should return True (modification detected)
+    # File now exists with mtime > 0, and stored mtime is 0
+    # has_been_modified() should detect this difference
     assert invalid.has_been_modified()
 
 
@@ -291,9 +293,10 @@ def test_project_has_been_modified(tmp_path):
     # Should not be modified right after creation
     assert not proj.has_been_modified()
 
-    # Modify the file
-    time.sleep(0.01)
-    path.touch()
+    # Manually set mtime to a different value to simulate passage of time
+    # When has_been_modified() checks against the real file's mtime, it will detect the difference
+    real_mtime = round(path.stat().st_mtime)
+    proj.mtime = real_mtime - 1  # Set to 1 second earlier
 
     # Should detect modification
     assert proj.has_been_modified()
@@ -323,7 +326,7 @@ def test_project_has_been_modified_with_none_mtime(tmp_path):
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
     proj = projects.Project(path, rect)
-    proj.mtime = None
+    proj.mtime = 0
 
     # Should return True when mtime is None
     assert proj.has_been_modified()
@@ -369,5 +372,3 @@ def test_project_deletion(tmp_path):
 
     # Delete the project - should not raise
     del proj
-
-

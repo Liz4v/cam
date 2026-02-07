@@ -28,11 +28,32 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
+    "mypy>=1.14.0",
+    "pytest-mypy>=0.10.3",
+    "types-requests>=2.32.4.20260107",
 ]
 
 [tool.pytest.ini_options]
 addopts = "--cov=cam --cov-report=term-missing --cov-fail-under=95 -q"
 python_files = ["tests/*.py"]
+testpaths = ["tests"]
 
 [tool.coverage.run]
 data_file = ".pytest_cache/.coverage"
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+files = ["src/cam"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
