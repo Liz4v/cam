@@ -6,6 +6,5 @@ dist/
 wheels/
 *.egg-info
 .venv/
-/.github/local-instructions.md
 .coverage
 .pytest_cache/

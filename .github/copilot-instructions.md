@@ -1,48 +1,79 @@
-**Project Overview**
+## Project Overview
 
 wwpppp is a small watcher for WPlace paint projects. It polls WPlace tile images, stitches cached tiles, and diffs them against project image files a user places in their platform pictures folder. The package entry point is exposed as the console script `wwpppp` (see `pyproject.toml`).
 
-**Quick facts**
+## Quick facts
+
 - **Requires:** Python >= 3.14 (see `pyproject.toml`)
 - **Console script:** `wwpppp = "wwpppp.main:main"`
 - **Main package:** `src/wwpppp`
 - **Key dependencies:** `loguru`, `pillow`, `platformdirs`, `requests`
 - **Linting:** `ruff` configured with `line-length = 120`
 
-**Quickstart (developer)**
+## Where to look for further context
+
+- `pyproject.toml` for packaging/deps and `ruff` config
+- `README.md` for user-facing documentation and external resources/links
+- `tests/` for unit tests and test patterns
+
+## Addressing the User
+
+When you finish working on your current prompt, purr or mew to wake me up. You can also hiss, I do take criticism.
+
+## Development Environment
+
+**PowerShell Version:** On Windows, the default shell is PowerShell 5.1 (Desktop Edition). This version has some syntax and feature limitations compared to modern PowerShell 7+ (Core), so be mindful of these when running commands or scripts.
+
+**Important PowerShell 5.1 Limitations:**
+- **Does NOT support `&&` for command chaining** — use semicolons `;` instead
+- **Does NOT support `||` for conditional execution** — use proper PowerShell syntax with `;` or `if` statements
+- This is Windows PowerShell (Desktop Edition), not PowerShell 7+ (Core)
+- Some cmdlets and features differ from modern PowerShell versions
+
+**Command Chaining Examples:**
+- ✅ Correct: `cd src; python script.py`
+- ❌ Wrong: `cd src && python script.py` (will fail with syntax error)
+
+## Quickstart (developer)
+
 See the `uv` documentation: https://pypi.org/project/uv/
 
 - Use `uv` to manage Python and project dependencies. Example:
 
-```powershell
+```bash
 uv sync
 ```
 
 - Run the watcher locally with the console script or module (via your `uv` environment):
 
-```powershell
+```bash
 uv run wwpppp
 ```
 
-**Where data lives**
+## Where data lives
+
 - The package uses `platformdirs.PlatformDirs("wwpppp")` and exposes `DIRS` from `src/wwpppp/__init__.py`.
 - User pictures path: `DIRS.user_pictures_path / "wplace"` — drop project PNGs here.
-- Cache path: `DIRS.user_cache_path` — tile cache (`tile-<tx>_<ty>.png`) and `projects.db` SQLite cache.
 
-**How it works (high level)**
+## How it works (high level)
+
 - The application runs in a unified 2-minute polling loop that checks both tiles and project files.
 - `has_tile_changed()` (in `ingest.py`) requests tiles from the WPlace tile backend and updates a cached paletted PNG if there are changes.
 - `Project` (in `projects.py`) discovers project PNGs placed under the `wplace` pictures folder. Filenames must include coordinates (regex used in code) and must use the project's palette.
+- Invalid files (missing coordinates, bad palette) are tracked as `ProjectShim` instances to avoid repeated load attempts.
 - `PALETTE` (in `palette.py`) enforces and converts images to the project palette (first color treated as transparent).
 - `Main` (in `main.py`) runs the polling loop: `check_tiles()` polls all tiles for changes, `check_projects()` scans for new/modified/deleted project files. On tile changes it diffs updated tiles with project images and logs progress.
 
-**File/Module map (where to look)**
+## File/Module map (where to look)
+
 - `src/wwpppp/__init__.py` — `DIRS` (platform dirs)
 - `src/wwpppp/main.py` — application entry, unified polling loop, project load/forget logic
 - `src/wwpppp/geometry.py` — `Tile`, `Point`, `Size`, `Rectangle` helpers (tile math)
 - `src/wwpppp/ingest.py` — `has_tile_changed()`, tile download and stitching helper
 - `src/wwpppp/palette.py` — palette enforcement + helper `PALETTE`
-- `src/wwpppp/projects.py` — `Project` model, caching, diffs
+- `src/wwpppp/projects.py` — `Project` model, `ProjectShim` shim, caching, diffs
+
+## Architecture conventions
 
 - The project is in early stages: public APIs and internals may change. Prefer simplicity, clarity, and small, focused edits.
 - Follow existing idioms: use `NamedTuple`/`dataclass`-like shapes, type hints, and explicit resource management (`with` for PIL Images).
@@ -53,7 +84,8 @@ uv run wwpppp
 - SQLite cache: use `CachedProjectMetadata` abstraction rather than writing ad-hoc SQL elsewhere.
 - Error handling: prefer non-fatal logging (warnings/debug) and avoid raising unexpected exceptions in the polling loop.
 
-**Developer workflow & checks**
+## Developer workflow & checks
+
 - Linting: run `ruff` (project defines `line-length = 120`).
 - Formatting: no explicit formatter in repo; follow current style and ruff suggestions.
 - Tests: unit tests live under `tests/`. We use `pytest` with `pytest-cov` for coverage.
@@ -62,26 +94,19 @@ uv run wwpppp
   - Focus tests on `geometry`, `palette.lookup`, and `projects` diff logic.
   - Run tests: `uv run pytest`
 
-**Running and debugging**
+## Running and debugging
+
 - To debug tile fetching behavior, call `has_tile_changed()` directly with a `Tile` object in an interactive script and observe `DIRS.user_cache_path` for generated `tile-*.png` files.
 - To debug project parsing, drop a correctly named PNG into `DIRS.user_pictures_path / 'wplace'` and watch the log output from `Main`.
 
-**Notes for Copilot (how to suggest changes)**
+## Notes for Copilot (how to suggest changes)
+
 - Suggest minimal, testable code changes and include brief rationale in the PR description.
 - When adding features, propose where to add unit tests (suggest `tests/test_geometry.py`, `tests/test_palette.py`).
 - If modifying image handling, show the expected lifecycle (open -> ensure palette -> close) and indicate why conversions are safe.
 - Prefer explicit, type-annotated functions and small helper functions over large refactors.
 
-**Packaging & distribution**
+## Packaging & distribution
+
 - `pyproject.toml` contains project metadata and the console script entry point.
 - Use `uv sync` for dependency management and installation.
-
-**Safety & Resource constraints**
-- Network I/O is used in `ingest.has_tile_changed`. Keep short timeouts and avoid unbounded parallel downloads.
-- Polling: The main loop sleeps for 120 seconds (2 minutes) between cycles. Ensure operations complete within reasonable time.
-
-**Where to look for further context**
-- `pyproject.toml` for packaging/deps and `ruff` config
-- `README.md` for user-facing documentation and external resources/links
-- `tests/` for unit tests and test patterns
-- [local-instructions.md](local-instructions.md) for instructions regarding user conversation and the development environment
