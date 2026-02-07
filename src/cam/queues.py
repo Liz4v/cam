@@ -141,7 +141,7 @@ def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> l
 class TileQueue:
     """A single temperature-based tile queue."""
 
-    temperature: int  # 0 = hottest, higher = colder, -1 = burning
+    temperature: int | None  # 0 = coldest, higher = hotter, None = burning
     tiles: list[TileMetadata] = field(default_factory=list)
 
     def is_empty(self) -> bool:
@@ -169,7 +169,7 @@ class TileQueue:
             self.tiles.append(tile_meta)
 
     def __str__(self) -> str:
-        descr = "burning" if self.temperature == -1 else f"temp={self.temperature}"
+        descr = "burning" if self.temperature is None else f"temp={self.temperature}"
         return f"{descr} queue ({len(self.tiles)} tiles)"
 
 
@@ -188,7 +188,7 @@ class QueueSystem:
             tiles: Set of all tiles to track
         """
         self.tile_metadata: dict[Tile, TileMetadata] = {}
-        self.burning_queue = TileQueue(temperature=-1)
+        self.burning_queue = TileQueue(temperature=None)
         self.temperature_queues: list[TileQueue] = []
         self.current_queue_index = 0
 
@@ -202,7 +202,7 @@ class QueueSystem:
     def _rebuild_queues(self) -> None:
         """Rebuild all queues from current tile metadata."""
         # Clear existing queues
-        self.burning_queue = TileQueue(temperature=-1)
+        self.burning_queue = TileQueue(temperature=None)
         self.temperature_queues = []
 
         # Separate burning tiles from temperature tiles
@@ -240,8 +240,10 @@ class QueueSystem:
         logger.info(f"Queue distribution (Zipf): {queue_sizes} for {len(temp_tiles)} tiles")
 
         # Create temperature queues and assign tiles
+        # Higher temperature numbers = hotter queues
         idx = 0
-        for temp_level, size in enumerate(queue_sizes):
+        for queue_idx, size in enumerate(queue_sizes):
+            temp_level = len(queue_sizes) - 1 - queue_idx  # Reverse: hottest gets highest number
             queue = TileQueue(temperature=temp_level)
             for _ in range(size):
                 if idx < len(temp_tiles):
