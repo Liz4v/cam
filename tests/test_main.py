@@ -5,7 +5,7 @@ from wwpppp.geometry import Point, Rectangle, Size, Tile
 from wwpppp.main import Main
 
 
-def test_main_load_and_consume(monkeypatch):
+def test_main_load_and_check_tiles(monkeypatch):
     # create a fake project with a rect covering tile (0,0)
     proj_path = Path("/tmp/proj.png")
 
@@ -34,9 +34,11 @@ def test_main_load_and_consume(monkeypatch):
     monkeypatch.setattr("wwpppp.main.Project.try_open", classmethod(lambda cls, p: proj))
 
     m = Main()
-    # consume tile should call project's run_diff
-    m.consume_new_tile(Tile(0, 0))
-    assert proj._called["run_diff"] == 1
+    # Mock has_tile_changed to return True
+    monkeypatch.setattr("wwpppp.main.has_tile_changed", lambda tile: True)
+    # check_tiles should call project's run_diff for tile (0,0)
+    m.check_tiles()
+    assert proj._called["run_diff"] >= 1
 
     # forget project removes tiles and calls forget()
     m.forget_project(proj_path)

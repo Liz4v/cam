@@ -1,21 +1,36 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from watchfiles import Change
-
 import wwpppp.main as mainmod
 
 
-def test_watch_for_updates_added_and_deleted(monkeypatch):
+def test_check_projects_handles_added_and_deleted(tmp_path, monkeypatch):
+    """Test that check_projects correctly handles added and deleted project files."""
+    wplace_dir = tmp_path / "wplace"
+    wplace_dir.mkdir()
+
+    # Setup DIRS to point to tmp_path
+    monkeypatch.setattr(
+        mainmod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+    )
+
     # create a fake project and Main instance
-    proj_path = Path("/tmp/p.png")
-    proj = SimpleNamespace(path=proj_path, rect=SimpleNamespace(tiles={}), run_diff=lambda: None, forget=lambda: None)
+    proj_path = wplace_dir / "p_0_0_1_1.png"
+    proj_path.touch()
+
+    proj = SimpleNamespace(
+        path=proj_path,
+        rect=SimpleNamespace(tiles={}),
+        run_diff=lambda: None,
+        forget=lambda: None,
+        mtime=proj_path.stat().st_mtime,
+    )
 
     # monkeypatch Project as a class with classmethods
     class FakeProjectClass:
         @classmethod
         def iter(cls):
-            return [proj]
+            return []
 
         @classmethod
         def try_open(cls, p):
@@ -25,23 +40,13 @@ def test_watch_for_updates_added_and_deleted(monkeypatch):
 
     m = mainmod.Main()
 
-    # monkeypatch TilePoller as context manager that yields
-    class DummyPoller:
-        def __init__(self, cb, tiles):
-            pass
+    # check_projects should detect the new file
+    m.check_projects()
+    assert proj_path in m.projects
 
-        def __enter__(self):
-            return self
+    # Delete the file
+    proj_path.unlink()
 
-        def __exit__(self, *a):
-            return False
-
-    monkeypatch.setattr(mainmod, "TilePoller", DummyPoller)
-
-    # patch watch_loop to yield one added and one deleted event
-    monkeypatch.setattr(
-        mainmod.Main, "watch_loop", lambda self: iter([(Change.added, proj_path), (Change.deleted, proj_path)])
-    )
-
-    # run watch_for_updates (should not raise)
-    m.watch_for_updates()
+    # check_projects should detect the deletion
+    m.check_projects()
+    assert proj_path not in m.projects

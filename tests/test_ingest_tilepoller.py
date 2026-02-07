@@ -1,31 +1,7 @@
-from types import SimpleNamespace
+"""
+Tests for ingest module (TilePoller removed as part of unified polling refactor).
+TilePoller has been removed in favor of direct has_tile_changed calls in the main polling loop.
+"""
 
-import wwpppp.ingest as ingest
-
-
-def test_tilepoller_context_manager(monkeypatch):
-    events = []
-
-    class FakeThread:
-        def __init__(self, *a, **k):
-            pass
-
-        def start(self):
-            events.append("start")
-
-        def join(self, timeout=None):
-            events.append("join")
-
-    monkeypatch.setattr(ingest, "Thread", FakeThread)
-    tp = ingest.TilePoller(lambda t: None, [])
-    with tp:
-        pass
-    assert events == ["start", "join"]
-
-
-def test_tilepoller_run_checks_stop():
-    tp = ingest.TilePoller(lambda t: None, [ingest.Tile(0, 0)])
-    # replace internal _stop with object where is_set False but wait returns True to exit early
-    tp._stop = type("S", (), {"is_set": staticmethod(lambda: False), "wait": staticmethod(lambda t: True)})()
-    # should return quickly without raising
-    tp._run()
+# These tests are kept as placeholders in case TilePoller functionality needs to be restored
+# or for historical reference. The actual TilePoller class has been removed from ingest.py.

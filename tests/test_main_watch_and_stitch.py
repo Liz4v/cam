@@ -1,7 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from PIL import Image
-from watchfiles import Change
 
 from wwpppp import main as main_mod
 from wwpppp import projects
@@ -9,12 +9,21 @@ from wwpppp.cache import ProjectCacheDB
 from wwpppp.geometry import Point, Rectangle, Size, Tile
 
 
-def test_watch_for_updates_processes_added_and_deleted(tmp_path, monkeypatch):
+def test_check_projects_processes_added_and_deleted(tmp_path, monkeypatch):
+    """Test that check_projects correctly handles adding and deleting projects."""
+    wplace_dir = tmp_path / "wplace"
+    wplace_dir.mkdir()
+
+    # Setup DIRS to point to tmp_path
+    monkeypatch.setattr(
+        main_mod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+    )
+
     # ensure Project.iter returns empty for deterministic start
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
     m = main_mod.Main()
 
-    path = tmp_path / "proj_0_0_1_1.png"
+    path = wplace_dir / "proj_0_0_1_1.png"
     path.touch()
 
     # Dummy project that exposes a single tile and records calls
@@ -24,6 +33,7 @@ def test_watch_for_updates_processes_added_and_deleted(tmp_path, monkeypatch):
         def __init__(self, p):
             self.path = p
             self.rect = Rectangle.from_point_size(Point.from4(0, 0, 0, 0), Size(1000, 1000))
+            self.mtime = p.stat().st_mtime if p.exists() else None
 
         def run_diff(self):
             called["run"] += 1
@@ -38,34 +48,15 @@ def test_watch_for_updates_processes_added_and_deleted(tmp_path, monkeypatch):
 
     monkeypatch.setattr(projects.Project, "try_open", classmethod(make_proj))
 
-    created = []
-
-    class DummyPoller:
-        def __init__(self, cb, tiles):
-            self.cb = cb
-            self.tiles = tiles
-            created.append(self)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(main_mod, "TilePoller", DummyPoller)
-
-    # watch_loop yields added then deleted
-    def fake_watch_loop():
-        yield (Change.added, path)
-        yield (Change.deleted, path)
-
-    m.watch_loop = fake_watch_loop
-
-    m.watch_for_updates()
-
-    # poller was created and should have seen tiles updated at least once
-    assert created
+    # check_projects should detect the added file
+    m.check_projects()
     assert called["run"] >= 1
+
+    # Delete the file
+    path.unlink()
+
+    # check_projects should detect the deleted file
+    m.check_projects()
     assert called["forgot"] >= 1
 
 

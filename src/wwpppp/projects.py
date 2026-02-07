@@ -18,6 +18,8 @@ _RE_HAS_COORDS = re.compile(r"[- _](\d+)[- _](\d+)[- _](\d+)[- _](\d+)\.png$", f
 class Project:
     """Represents a wplace project stored on disk."""
 
+    mtime: int  # modification time of the project file, used for cache validation
+
     @classmethod
     def iter(cls) -> Iterable[Self]:
         """Yields all valid projects found in the user pictures directory."""

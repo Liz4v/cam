@@ -1,15 +1,13 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from watchfiles import Change
-
 from wwpppp import main as main_mod
 from wwpppp import projects
 from wwpppp.cache import ProjectCacheDB
 from wwpppp.geometry import Tile
 
 
-def test_main_indexing_and_consume_and_load_forget(tmp_path, monkeypatch):
+def test_main_indexing_and_check_tiles_and_load_forget(tmp_path, monkeypatch):
     # start with no projects
     monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
     m = main_mod.Main()
@@ -38,8 +36,9 @@ def test_main_indexing_and_consume_and_load_forget(tmp_path, monkeypatch):
     assert path in m.projects
     assert Tile(0, 0) in m.tiles
 
-    # consume tile should call run_diff
-    m.consume_new_tile(Tile(0, 0))
+    # check_tiles with has_tile_changed returning True should call run_diff
+    monkeypatch.setattr(main_mod, "has_tile_changed", lambda tile: True)
+    m.check_tiles()
     assert called.get("run") is True
 
     # forget should remove project and call forget
@@ -48,16 +47,66 @@ def test_main_indexing_and_consume_and_load_forget(tmp_path, monkeypatch):
     assert called.get("forgot") is True
 
 
-def test_watch_loop_keyboardinterrupt(monkeypatch, tmp_path):
-    # simulate watch yielding once then KeyboardInterrupt
-    def fake_watch(path):
-        yield [(Change.added, str(tmp_path / "p"))]
-        raise KeyboardInterrupt
+def test_check_projects_detects_added_and_deleted(tmp_path, monkeypatch):
+    """Test that check_projects detects added and deleted project files."""
+    wplace_dir = tmp_path / "wplace"
+    wplace_dir.mkdir()
 
-    monkeypatch.setattr(main_mod, "watch", fake_watch)
-    gen = main_mod.Main().watch_loop()
-    change, p = next(gen)
-    assert change == Change.added
+    # Setup DIRS to point to tmp_path
+    monkeypatch.setattr(
+        main_mod, "DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+    )
+
+    # Start with no projects
+    monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
+    m = main_mod.Main()
+
+    # Track calls to load_project and forget_project
+    loaded = []
+    forgotten = []
+    original_load = m.load_project
+    original_forget = m.forget_project
+
+    def track_load(p):
+        loaded.append(p)
+        original_load(p)
+
+    def track_forget(p):
+        forgotten.append(p)
+        original_forget(p)
+
+    m.load_project = track_load
+    m.forget_project = track_forget
+
+    # Create a new project file
+    proj_path = wplace_dir / "proj_0_0_1_1.png"
+    proj_path.touch()
+
+    # Mock Project.try_open to return a dummy project
+    class DummyProj:
+        def __init__(self, path):
+            self.path = path
+            self.rect = SimpleNamespace(tiles=frozenset())
+
+        def run_diff(self):
+            pass
+
+        def forget(self):
+            pass
+
+    monkeypatch.setattr(projects.Project, "try_open", classmethod(lambda cls, p: DummyProj(p)))
+
+    # check_projects should detect the new file
+    m.check_projects()
+    assert proj_path in loaded
+
+    # Delete the project file
+    proj_path.unlink()
+
+    # check_projects should detect the deletion
+    loaded.clear()
+    m.check_projects()
+    assert proj_path in forgotten
 
 
 def test_palette_lookup_transparent_and_ensure():
@@ -77,45 +126,24 @@ def test_has_tile_changed_http_error(monkeypatch):
     assert has_tile_changed(Tile(0, 0)) is False
 
 
-def test_watch_for_updates_calls_load_and_forget(monkeypatch, tmp_path):
+def test_run_forever_handles_keyboard_interrupt(monkeypatch):
+    """Test that run_forever handles KeyboardInterrupt gracefully."""
+    monkeypatch.setattr(projects.Project, "iter", classmethod(lambda cls: []))
     m = main_mod.Main()
-    path = tmp_path / "proj_0_0_1_1.png"
-    path.touch()
 
-    # dummy TilePoller context manager
-    class DummyPoller:
-        def __init__(self, cb, tiles):
-            self.tiles = tiles
+    # Make check_tiles and check_projects raise KeyboardInterrupt after first call
+    call_count = {"count": 0}
 
-        def __enter__(self):
-            return self
+    def fake_check_tiles():
+        call_count["count"] += 1
+        if call_count["count"] > 0:
+            raise KeyboardInterrupt
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    m.check_tiles = fake_check_tiles
+    m.check_projects = lambda: None
 
-    monkeypatch.setattr(main_mod, "TilePoller", DummyPoller)
-
-    # make watch_loop yield added then deleted
-    def fake_watch_loop():
-        yield (Change.added, path)
-        yield (Change.deleted, path)
-
-    m.watch_loop = fake_watch_loop
-
-    called = {"load": 0, "forget": 0}
-
-    def fake_load(p):
-        called["load"] += 1
-
-    def fake_forget(p):
-        called["forget"] += 1
-
-    m.load_project = fake_load
-    m.forget_project = fake_forget
-
-    m.watch_for_updates()
-    assert called["load"] == 2 or called["load"] >= 1
-    assert called["forget"] >= 1
+    # run_forever should catch KeyboardInterrupt and exit gracefully
+    m.run_forever()  # Should not raise
 
 
 def test_cache_cursor_outer_exception_closes(monkeypatch, tmp_path):

@@ -1,11 +1,11 @@
+import time
 from pathlib import Path
 
 from loguru import logger
-from watchfiles import Change, watch
 
 from . import DIRS
 from .geometry import Tile
-from .ingest import TilePoller
+from .ingest import has_tile_changed
 from .projects import Project
 
 
@@ -25,31 +25,59 @@ class Main:
         logger.info(f"Indexed {len(tile_to_project)} tiles.")
         return tile_to_project
 
-    def consume_new_tile(self, found: Tile) -> None:
-        """Consume new tile provided by a downloader, updating projects as needed."""
-        for proj in self.tiles.get(found) or ():
-            proj.run_diff()
+    def check_tiles(self) -> None:
+        """Check all tiles for changes and update affected projects."""
+        for tile in list(self.tiles.keys()):
+            if has_tile_changed(tile):
+                for proj in self.tiles.get(tile) or ():
+                    proj.run_diff()
 
-    def watch_for_updates(self) -> None:
-        """Watch projects directory for changes, processing as needed."""
-        logger.info("Watching for new tiles and projects...")
-        with TilePoller(self.consume_new_tile, list(self.tiles.keys())) as poller:
-            for change, path in self.watch_loop():
-                if change != Change.added:
-                    self.forget_project(path)
-                if change != Change.deleted:
-                    self.load_project(path)
-                poller.tiles = list(self.tiles.keys())
-
-    def watch_loop(self):
-        """Yields file changes from watching the projects directory."""
+    def check_projects(self) -> None:
+        """Check projects directory for added, modified, or deleted files."""
         wplace_path = DIRS.user_pictures_path / "wplace"
+        wplace_path.mkdir(parents=True, exist_ok=True)
+
+        # Get current files from disk
+        current_files = {p for p in wplace_path.glob("*.png") if p.is_file()}
+        known_files = set(self.projects.keys())
+
+        # Handle deleted files
+        deleted = known_files - current_files
+        for path in deleted:
+            self.forget_project(path)
+
+        # Handle new and potentially modified files
+        for path in current_files:
+            if path in deleted:
+                continue
+            # Load/reload all current files to catch modifications
+            if path not in known_files or self._file_modified(path):
+                self.load_project(path)
+
+    def _file_modified(self, path: Path) -> bool:
+        """Check if a project file has been modified since it was loaded."""
+        proj = self.projects.get(path)
+        if not proj:
+            return True
         try:
-            for batch in watch(wplace_path):
-                for change, path_str in batch:
-                    yield change, Path(path_str)
+            current_mtime = path.stat().st_mtime
+            return current_mtime != getattr(proj, "mtime", None)
+        except OSError:
+            return True
+
+    def run_forever(self) -> None:
+        """Run the main polling loop, checking tiles and projects every two minutes."""
+        logger.info("Starting polling loop (~2-minute cycle)...")
+        try:
+            while True:
+                logger.debug("Checking for tile updates...")
+                self.check_tiles()
+                logger.debug("Checking for project file changes...")
+                self.check_projects()
+                logger.debug("Cycle complete, sleeping for 120 seconds...")
+                time.sleep(127)  # we want a little bit of drift to avoid always hitting the same time on the minute
         except KeyboardInterrupt:
-            pass
+            logger.info("Interrupted by user.")
 
     def forget_project(self, path: Path) -> None:
         """Clears cached data about the project at the given path."""
@@ -72,6 +100,11 @@ class Main:
         if not proj:
             return
         self.projects[path] = proj
+        # Store modification time for change detection
+        try:
+            proj.mtime = path.stat().st_mtime
+        except OSError:
+            proj.mtime = None
         for tile in proj.rect.tiles:
             self.tiles.setdefault(tile, set()).add(proj)
         logger.info(f"{path.name}: Loaded project")
@@ -80,7 +113,7 @@ class Main:
 def main():
     """Main entry point for wwpppp."""
     worker = Main()
-    worker.watch_for_updates()
+    worker.run_forever()
     logger.info("Exiting.")
 
 

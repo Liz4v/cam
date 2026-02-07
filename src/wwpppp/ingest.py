@@ -1,6 +1,4 @@
 import io
-from threading import Event, Thread
-from typing import Callable
 
 import requests
 from loguru import logger
@@ -9,30 +7,6 @@ from PIL import Image
 from . import DIRS
 from .geometry import Rectangle, Size, Tile
 from .palette import PALETTE
-
-
-class TilePoller:
-    def __init__(self, callback: Callable[[Tile], None], tiles: list[Tile]) -> None:
-        self.callback = callback
-        self.tiles = tiles
-        self._thread = Thread(target=self._run, daemon=True, name="TilePoller")
-        self._stop = Event()
-
-    def __enter__(self):
-        self._thread.start()
-        return self
-
-    def __exit__(self, *_):
-        self._stop.set()
-        self._thread.join(timeout=10)
-
-    def _run(self):
-        while not self._stop.is_set():
-            for tile in self.tiles:
-                if self._stop.wait(127):  # doesn't make sense to check too fast
-                    return
-                if has_tile_changed(tile):
-                    self.callback(tile)
 
 
 def has_tile_changed(tile: Tile) -> bool:
