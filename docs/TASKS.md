@@ -79,6 +79,10 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 
 > **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
 
+### ✅ Enhanced project tracking with snapshots and metadata (2026-02-07)
+
+Implemented comprehensive project state persistence: created `ProjectMetadata` dataclass in new `metadata.py` module tracking completion history (max completion, progress/regress counters, largest regress event), tile updates (last update per tile, 24h rolling list), streaks, and completion rate; refactored `Project.run_diff()` to save snapshots (PNG) and metadata (YAML) adjacent to project files, comparing current state against both target and previous snapshot to detect progress vs regress; added 17 comprehensive tests in `test_metadata.py` achieving 100% coverage of metadata module; all 31 project tests passing with 86% coverage of projects.py.
+
 ### ✅ Intelligent tile checking with warm/cold queues (2026-02-07)
 
 Implemented temperature-based queue system with Zipf distribution for intelligent tile monitoring: burning queue for never-checked tiles, multiple hot-to-cold temperature queues based on modification times, round-robin selection across queues choosing least-recently-checked tiles, and surgical repositioning with cascade mechanics when tiles move to hotter queues. Includes 23 comprehensive tests and integration with `TileChecker`.

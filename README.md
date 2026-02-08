@@ -53,6 +53,7 @@ uv run cam
 
 - **Project images:** `<user_pictures_path>/wplace/` — place your project PNGs here
 - **Tile cache:** `<user_cache_path>/cam/` — cached tiles from WPlace
+- **Metadata & snapshots:** Saved alongside each project as `.yaml` and `.snapshot.png` files for tracking completion history and detecting progress/regress
 
 Platform paths are managed via `platformdirs.PlatformDirs("cam")`.
 

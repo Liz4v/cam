@@ -7,7 +7,7 @@ cam (Canvas Activity Monitor) is a small watcher for WPlace paint projects. It p
 - **Requires:** Python >= 3.14 (see `pyproject.toml`)
 - **Console script:** `cam = "cam.main:main"`
 - **Main package:** `src/cam`
-- **Key dependencies:** `loguru`, `pillow`, `platformdirs`, `requests`
+- **Key dependencies:** `loguru`, `pillow`, `platformdirs`, `requests`, `ruamel.yaml`
 - **Linting:** `ruff` configured with `line-length = 120`
 
 ## Where to look for further context
@@ -55,11 +55,13 @@ uv run cam
 
 - The application runs in a unified ~97 second polling loop (60φ = 30(1+√5), chosen to avoid resonance with WPlace's internal timers) that checks both tiles and project files.
 - Tile polling uses intelligent temperature-based queue system: `QueueSystem` (in `queues.py`) maintains burning and temperature queues with Zipf distribution sizing. Tiles are selected round-robin across queues, with least-recently-checked tile selected from each queue.
+- `TileChecker` (in `ingest.py`) manages tile monitoring: selects tiles via `QueueSystem`, calls `has_tile_changed()` to fetch from WPlace backend, and triggers project diffs when changes are detected.
 - `has_tile_changed()` (in `ingest.py`) requests tiles from the WPlace tile backend and updates a cached paletted PNG if there are changes.
 - `Project` (in `projects.py`) discovers project PNGs placed under the `wplace` pictures folder. Filenames must include 4 coordinates in format `*_<tx>_<ty>_<px>_<py>.png` (tile x, tile y, pixel x 0-999, pixel y 0-999) and must use the project's palette.
 - Invalid files (missing coordinates, bad palette) are tracked as `ProjectShim` instances to avoid repeated load attempts.
 - `PALETTE` (in `palette.py`) enforces and converts images to the project palette (first color treated as transparent).
-- `Main` (in `main.py`) runs the polling loop: `check_tiles()` selects next tile from queue system, `check_projects()` scans for new/modified/deleted project files. On tile changes it diffs updated tiles with project images and logs progress.
+- `ProjectMetadata` (in `metadata.py`) tracks completion history, progress/regress statistics, streaks, and rates. Persists to YAML files alongside project images.
+- `Main` (in `main.py`) runs the polling loop: `TileChecker.check_next_tile()` handles tile selection and checking, `check_projects()` scans for new/modified/deleted project files. On tile changes it diffs updated tiles with project images and logs progress.
 - Queue system tracks tile metadata (last checked, last modified) and repositions tiles surgically when modification times change. When a tile moves to a hotter queue, coldest tiles cascade down through intervening queues to maintain Zipf distribution sizes.
 
 ## File/Module map (where to look)
@@ -67,9 +69,10 @@ uv run cam
 - `src/cam/__init__.py` — `DIRS` (platform dirs)
 - `src/cam/main.py` — application entry, unified polling loop, project load/forget logic
 - `src/cam/geometry.py` — `Tile`, `Point`, `Size`, `Rectangle` helpers (tile math)
-- `src/cam/ingest.py` — `has_tile_changed()`, tile download and stitching helper
+- `src/cam/ingest.py` — `TileChecker` (tile monitoring orchestration), `has_tile_changed()` (tile download), `stitch_tiles()` (canvas assembly)
 - `src/cam/palette.py` — palette enforcement + helper `PALETTE`
-- `src/cam/projects.py` — `Project` model, `ProjectShim` shim, caching, diffs
+- `src/cam/projects.py` — `Project` model (orchestrates diffs), `ProjectShim` shim (invalid files)
+- `src/cam/metadata.py` — `ProjectMetadata` (completion tracking, statistics, streaks, YAML persistence)
 - `src/cam/queues.py` — `QueueSystem`, temperature-based tile queues with Zipf distribution, tile metadata tracking
 
 ## Architecture conventions
@@ -84,15 +87,21 @@ uv run cam
 - Project state: Projects are discovered from the filesystem on each polling cycle and kept in memory during runtime (metadata only).
 - Error handling: prefer non-fatal logging (warnings/debug) and avoid raising unexpected exceptions in the polling loop.
 - Defensive programming: Use assertions for "shouldn't happen" cases that indicate logic errors. These should be tested to ensure they catch bugs during development. Example: `assert condition, "clear error message"` for invariants that must hold.
+- File size management:
+  - If a Python file exceeds 400 lines, review it for simplification opportunities; if simplification is insufficient, review it to split it into two modules; if splitting is not appropriate, add a comment at the top documenting that these approaches were attempted and why they were not viable.
+  - If a Python file is smaller than 20 lines, review it to see if it's still needed; if it is, consider whether it should be merged into another module for simplicity; if it should remain separate, add a comment at the top documenting why it is still needed and why merging was not appropriate.
+  - Test files don't follow file size directives. Test files are named after the module they test, prefixed with `test_`, e.g., `test_geometry.py` for `geometry.py`.
 
 ## Developer workflow & checks
 
 - Linting: run `ruff` (project defines `line-length = 120`).
+- Type checking: run `mypy` (configured in `pyproject.toml` under `[tool.mypy]`).
+  - Run type checks: `uv run mypy`
 - Formatting: no explicit formatter in repo; follow current style and ruff suggestions.
 - Tests: unit tests live under `tests/`. We use `pytest` with `pytest-cov` for coverage.
   - Coverage is configured in `pyproject.toml` under `[tool.pytest.ini_options]`.
   - The project enforces a coverage threshold for all modules.
-  - Focus tests on `geometry`, `palette.lookup`, `projects` diff logic, and `queues` repositioning.
+  - Focus tests on `geometry`, `palette.lookup`, `projects` diff logic, `metadata` tracking/persistence, and `queues` repositioning.
   - Test assertions: Write tests that verify assertions fire for "shouldn't happen" cases (use `pytest.raises(AssertionError)`).
   - Run tests: `uv run pytest`
 

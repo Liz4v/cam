@@ -5,6 +5,7 @@ from PIL import Image
 
 from cam import projects
 from cam.geometry import Point, Rectangle, Size
+from cam.metadata import ProjectMetadata
 from cam.palette import PALETTE
 
 
@@ -353,3 +354,295 @@ def test_project_deletion(tmp_path):
 
     # Delete the project - should not raise
     del proj
+
+
+# ProjectMetadata tests
+
+
+def test_metadata_from_rect():
+    """Test ProjectMetadata.from_rect creates correct initial state."""
+    rect = Rectangle.from_point_size(Point(100, 200), Size(50, 60))
+    meta = ProjectMetadata.from_rect(rect)
+
+    assert meta.x == 100
+    assert meta.y == 200
+    assert meta.width == 50
+    assert meta.height == 60
+    assert meta.first_seen > 0
+    assert meta.last_check > 0
+    assert meta.max_completion_pixels == 0
+    assert meta.total_progress == 0
+    assert meta.total_regress == 0
+
+
+def test_metadata_to_dict_and_from_dict():
+    """Test metadata serialization round-trip."""
+    rect = Rectangle.from_point_size(Point(10, 20), Size(30, 40))
+    meta = ProjectMetadata.from_rect(rect)
+    meta.max_completion_pixels = 100
+    meta.max_completion_percent = 75.5
+    meta.total_progress = 50
+    meta.total_regress = 5
+    meta.streak_type = "progress"
+    meta.streak_count = 3
+    meta.tile_last_update = {"1_2": 12345, "3_4": 67890}
+    meta.tile_updates_24h = [("1_2", 12345), ("3_4", 67890)]
+
+    data = meta.to_dict()
+    meta2 = ProjectMetadata.from_dict(data)
+
+    assert meta2.x == meta.x
+    assert meta2.y == meta.y
+    assert meta2.width == meta.width
+    assert meta2.height == meta.height
+    assert meta2.max_completion_pixels == meta.max_completion_pixels
+    assert meta2.max_completion_percent == meta.max_completion_percent
+    assert meta2.total_progress == meta.total_progress
+    assert meta2.total_regress == meta.total_regress
+    assert meta2.streak_type == meta.streak_type
+    assert meta2.streak_count == meta.streak_count
+    assert meta2.tile_last_update == meta.tile_last_update
+    assert meta2.tile_updates_24h == meta.tile_updates_24h
+
+
+def test_metadata_prune_old_tile_updates():
+    """Test pruning of old tile updates from 24h list."""
+    meta = ProjectMetadata()
+    now = round(time.time())
+    old_time = now - 100000  # more than 24h ago
+    recent_time = now - 1000  # within 24h
+
+    meta.tile_updates_24h = [
+        ("1_2", old_time),
+        ("3_4", recent_time),
+        ("5_6", old_time),
+        ("7_8", recent_time),
+    ]
+
+    cutoff = now - 86400  # 24h ago
+    meta.prune_old_tile_updates(cutoff)
+
+    assert len(meta.tile_updates_24h) == 2
+    assert ("3_4", recent_time) in meta.tile_updates_24h
+    assert ("7_8", recent_time) in meta.tile_updates_24h
+    assert ("1_2", old_time) not in meta.tile_updates_24h
+
+
+def test_metadata_update_tile():
+    """Test tile update recording."""
+    from cam.geometry import Tile
+
+    meta = ProjectMetadata()
+    tile = Tile(1, 2)
+    timestamp = 12345
+
+    meta.update_tile(tile, timestamp)
+
+    assert meta.tile_last_update["1_2"] == timestamp
+    assert ("1_2", timestamp) in meta.tile_updates_24h
+
+    # Update same tile with new timestamp
+    new_timestamp = 67890
+    meta.update_tile(tile, new_timestamp)
+
+    assert meta.tile_last_update["1_2"] == new_timestamp
+    assert ("1_2", new_timestamp) in meta.tile_updates_24h
+
+
+def test_project_metadata_paths(tmp_path):
+    """Test snapshot_path and metadata_path properties."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    path.touch()
+    rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
+    proj = projects.Project(path, rect)
+
+    assert proj.snapshot_path == tmp_path / "proj_0_0_0_0.snapshot.png"
+    assert proj.metadata_path == tmp_path / "proj_0_0_0_0.metadata.yaml"
+
+
+def test_project_metadata_save_and_load(tmp_path):
+    """Test metadata persistence to YAML file."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    im = _paletted_image((2, 2), value=1)
+    im.save(path)
+    rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
+    proj = projects.Project(path, rect)
+
+    # Modify metadata
+    proj.metadata.max_completion_pixels = 42
+    proj.metadata.total_progress = 100
+    proj.metadata.streak_type = "progress"
+    proj.metadata.streak_count = 5
+
+    # Save metadata
+    proj.save_metadata()
+    assert proj.metadata_path.exists()
+
+    # Create new project instance and verify metadata loaded
+    proj2 = projects.Project(path, rect)
+    assert proj2.metadata.max_completion_pixels == 42
+    assert proj2.metadata.total_progress == 100
+    assert proj2.metadata.streak_type == "progress"
+    assert proj2.metadata.streak_count == 5
+
+
+def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
+    """Test snapshot persistence."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    im = _paletted_image((4, 4), value=1)
+    im.save(path)
+    rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
+    proj = projects.Project(path, rect)
+
+    # Create and save a snapshot
+    snapshot = _paletted_image((4, 4), value=2)
+    proj.save_snapshot(snapshot)
+    assert proj.snapshot_path.exists()
+    assert proj.metadata.last_snapshot > 0
+
+    # Load snapshot and verify
+    loaded = proj.load_snapshot()
+    assert loaded is not None
+    with loaded:
+        data = loaded.get_flattened_data()
+        assert all(v == 2 for v in data)
+
+
+def test_project_snapshot_load_nonexistent(tmp_path):
+    """Test loading snapshot when it doesn't exist."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    im = _paletted_image((2, 2), value=1)
+    im.save(path)
+    rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
+    proj = projects.Project(path, rect)
+
+    snapshot = proj.load_snapshot()
+    assert snapshot is None
+
+
+def test_run_diff_with_metadata_tracking(tmp_path, monkeypatch):
+    """Test that run_diff updates metadata correctly."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    path.touch()
+    rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
+    proj = projects.Project(path, rect)
+
+    # Setup: target has some pixels set
+    target = _paletted_image((4, 4), value=0)
+    target.putpixel((0, 0), 1)
+    target.putpixel((1, 1), 2)
+    target.putpixel((2, 2), 3)
+
+    # Current state: partial progress (1 pixel correct, 2 wrong)
+    current = _paletted_image((4, 4), value=0)
+    current.putpixel((0, 0), 1)  # correct
+
+    monkeypatch.setattr(PALETTE, "open_image", lambda path_arg: target)
+    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current)
+
+    proj.run_diff()
+
+    # Check metadata was updated
+    assert proj.metadata.last_check > 0
+    assert proj.metadata.max_completion_pixels > 0
+    assert proj.metadata.max_completion_percent > 0
+    assert proj.snapshot_path.exists()
+
+
+def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
+    """Test progress/regress detection between checks."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    path.touch()
+    rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
+    proj = projects.Project(path, rect)
+
+    # Target: pixels (0,0)=1, (1,1)=2
+    target = _paletted_image((4, 4), value=0)
+    target.putpixel((0, 0), 1)
+    target.putpixel((1, 1), 2)
+
+    # First check: (0,0) correct
+    current1 = _paletted_image((4, 4), value=0)
+    current1.putpixel((0, 0), 1)
+
+    # Monkeypatch to return target for project path, let snapshots work normally
+    original_open_image = PALETTE.open_image
+
+    def open_image_mock(path_arg):
+        if ".snapshot." in str(path_arg):
+            return original_open_image(path_arg)  # Use real implementation for snapshots
+        return target
+
+    monkeypatch.setattr(PALETTE, "open_image", open_image_mock)
+    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current1)
+
+    proj.run_diff()
+    initial_progress = proj.metadata.total_progress
+
+    # Second check: (0,0) still correct, (1,1) now correct too (progress)
+    current2 = _paletted_image((4, 4), value=0)
+    current2.putpixel((0, 0), 1)
+    current2.putpixel((1, 1), 2)
+
+    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current2)
+
+    proj.run_diff()
+
+    # Should have detected 1 pixel of progress
+    assert proj.metadata.total_progress == initial_progress + 1
+    assert proj.metadata.streak_type == "progress"
+    assert proj.metadata.streak_count >= 1
+
+
+def test_run_diff_regress_detection(tmp_path, monkeypatch):
+    """Test regress (griefing) detection."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    path.touch()
+    rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
+    proj = projects.Project(path, rect)
+
+    # Target: pixel (0,0)=1
+    target = _paletted_image((4, 4), value=0)
+    target.putpixel((0, 0), 1)
+
+    # First check: (0,0) correct
+    current1 = _paletted_image((4, 4), value=0)
+    current1.putpixel((0, 0), 1)
+
+    monkeypatch.setattr(PALETTE, "open_image", lambda path_arg: target)
+    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current1)
+
+    proj.run_diff()
+
+    # Second check: (0,0) now wrong (regress)
+    current2 = _paletted_image((4, 4), value=0)
+    current2.putpixel((0, 0), 7)  # wrong color
+
+    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current2)
+
+    proj.run_diff()
+
+    # Should have detected regress
+    assert proj.metadata.total_regress == 1
+    assert proj.metadata.streak_type == "regress"
+    assert proj.metadata.largest_regress_pixels == 1
+
+
+def test_run_diff_complete_status(tmp_path, monkeypatch):
+    """Test complete project detection."""
+    path = tmp_path / "proj_0_0_0_0.png"
+    path.touch()
+    rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
+    proj = projects.Project(path, rect)
+
+    # Target and current match perfectly
+    target = _paletted_image((2, 2), value=1)
+    current = _paletted_image((2, 2), value=1)
+
+    monkeypatch.setattr(PALETTE, "open_image", lambda path_arg: target)
+    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current)
+
+    proj.run_diff()
+
+    # Should detect as complete - streak shows no change since it was already complete
+    assert proj.metadata.streak_type == "nochange"
