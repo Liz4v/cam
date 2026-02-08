@@ -8,6 +8,32 @@ _No active high priority tasks._
 
 ## Backlog
 
+### Discord Bot for project tracking and notifications
+
+**Status:** Planning
+**Priority:** Medium
+
+**Description:**
+Create a Discord bot that integrates with cam to provide real-time project monitoring through Discord. Users can add and manage projects via Discord commands, and the bot maintains living status messages that update as progress changes. Bot will only operate in trusted servers.
+
+**Key Features:**
+- Project management through Discord commands (`/cam add`, `/cam remove`, `/cam list`)
+- Automatic status message updates showing progress, last change, timestamps
+- Server whitelist for security
+- Rich embeds with progress bars and visual indicators
+- Rate limiting to respect Discord API constraints
+
+**Documentation:**
+- See `DISCORD_BOT_DESIGN.md` for architecture and technical design
+- See `DISCORD_BOT_TASKS.md` for detailed implementation task breakdown
+
+**Related Code:**
+- Will integrate with `Project` class in `src/cam/projects.py`
+- Will reuse `PALETTE` from `src/cam/palette.py` for image validation
+- Will use `DIRS` from `src/cam/__init__.py` for file management
+
+---
+
 ### Detect and alarm on project regression (griefing/attacks)
 
 **Status:** Backlog
