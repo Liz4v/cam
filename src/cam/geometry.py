@@ -1,7 +1,7 @@
 """Geometric primitives for tile math and coordinate conversion.
 
 Provides immutable types for working with WPlace's coordinate system:
-- Tile: 1000x1000 grid cells in the tile lattice
+- Tile: 2048x2048 grid cells in the tile lattice, each containing 1000x1000 pixels
 - Point: individual pixel coordinates in the canvas
 - Size: width and height dimensions
 - Rectangle: axis-aligned rectangular regions with tile enumeration
@@ -39,6 +39,7 @@ class Point(NamedTuple):
         """Create a Point from (tx, ty, px, py) tuple as represented in project file names."""
         assert min(tx, ty, px, py) >= 0, "Tile and pixel coordinates must be non-negative"
         assert max(px, py) < 1000, "Pixel coordinates must be less than 1000"
+        assert max(tx, ty) < 2048, "Tile coordinates must be less than 2048"
         return cls(tx * 1000 + px, ty * 1000 + py)
 
     def to4(self) -> tuple[int, int, int, int]:
