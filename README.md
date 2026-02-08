@@ -54,16 +54,22 @@ uv run cam
 - **Project images:** `<user_pictures_path>/wplace/` — place your project PNGs here
 - **Tile cache:** `<user_cache_path>/cam/` — cached tiles from WPlace
 - **Metadata & snapshots:** Saved alongside each project as `.yaml` and `.snapshot.png` files for tracking completion history and detecting progress/regress
+- **Logs:** `<user_log_path>/cam.log` — application logs with 10 MB rotation and 7-day retention
 
 Platform paths are managed via `platformdirs.PlatformDirs("cam")`.
 
 ## Development
 
-The project uses `ruff` for linting (line-length = 120) and `pytest` for testing.
+The project uses `ruff` for linting (line-length = 120), `mypy` for type checking, and `pytest` for testing with 95% coverage threshold.
 
 Run tests:
 ```powershell
 uv run pytest
+```
+
+Run type checking:
+```powershell
+uv run mypy
 ```
 
 ## See Also
