@@ -25,6 +25,9 @@ def test_main_load_and_check_tiles(monkeypatch):
         def run_diff(self, changed_tile=None):
             self._called["run_diff"] += 1
 
+        def get_first_seen(self) -> int:
+            return 1000
+
         def __hash__(self):
             return hash(self.path)
 
@@ -74,6 +77,9 @@ def test_main_indexing_and_check_tiles_and_load_forget(tmp_path, monkeypatch):
         def run_diff(self, changed_tile=None):
             called["run"] = True
 
+        def get_first_seen(self) -> int:
+            return 1000
+
     monkeypatch.setattr(projects.Project, "try_open", classmethod(lambda cls, p: DummyProj(p)))
 
     m.maybe_load_project(path)
@@ -113,6 +119,9 @@ def test_main_forget_removes_tile_key(monkeypatch):
         def __init__(self, path, rect):
             self.path = path
             self.rect = rect
+
+        def get_first_seen(self) -> int:
+            return 1000
 
         def __hash__(self):
             return hash(self.path)
@@ -199,6 +208,9 @@ def test_check_projects_detects_added_and_deleted(tmp_path, monkeypatch):
         def run_diff(self):
             pass
 
+        def get_first_seen(self) -> int:
+            return 1000
+
     monkeypatch.setattr(projects.Project, "try_open", classmethod(lambda cls, p: DummyProj(p)))
 
     # check_projects should detect the new file
@@ -242,6 +254,9 @@ def test_check_projects_processes_added_and_deleted(tmp_path, monkeypatch):
 
         def run_diff(self):
             called["run"] += 1
+
+        def get_first_seen(self) -> int:
+            return 1000
 
     def make_proj(cls, p):
         inst = DummyProj(p)
@@ -291,6 +306,9 @@ def test_check_projects_handles_modified_files(tmp_path, monkeypatch):
             except OSError:
                 return True
 
+        def get_first_seen(self) -> int:
+            return 1000
+
         def run_diff(self):
             pass
 
@@ -339,6 +357,9 @@ def test_check_projects_skips_deleted_files_in_current_loop(tmp_path, monkeypatc
 
         def run_diff(self):
             pass
+
+        def get_first_seen(self) -> int:
+            return 1000
 
     existing_proj = DummyProj(proj_path)
 
@@ -545,6 +566,9 @@ def test_main_check_tiles_round_robin(monkeypatch):
 
         def has_been_modified(self):
             return False
+
+        def get_first_seen(self) -> int:
+            return 1000
 
         def __hash__(self):
             return hash(self.path)

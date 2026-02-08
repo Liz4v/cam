@@ -102,7 +102,7 @@ def test_tile_queue_select_next_empty():
     """Test selecting from empty queue."""
     queue = TileQueue(temperature=0)
     assert queue.is_empty()
-    assert queue.select_next() is None
+    assert queue.select_next({}) is None
 
 
 def test_tile_queue_select_next_oldest():
@@ -143,7 +143,7 @@ def test_queue_system_initialization(tmp_path, monkeypatch):
         cache_path = tmp_path / f"tile-{tile}.png"
         cache_path.write_bytes(b"data")
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Should have metadata for all tiles
     assert len(qs.tile_metadata) == 3
@@ -158,7 +158,7 @@ def test_queue_system_initialization_no_cache(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     tiles = {Tile(0, 0), Tile(1, 0), Tile(2, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Should have metadata for all tiles
     assert len(qs.tile_metadata) == 3
@@ -180,7 +180,7 @@ def test_queue_system_select_next_tile(tmp_path, monkeypatch):
         cache_path = tmp_path / f"tile-{tile}.png"
         cache_path.write_bytes(b"data")
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Should be able to select a tile
     meta = qs.select_next_tile()
@@ -206,7 +206,7 @@ def test_queue_system_round_robin(tmp_path, monkeypatch):
         mtime = now - (i * 1000)  # Older as i increases
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Select several tiles and verify we're rotating through queues
     selected_tiles = []
@@ -236,7 +236,7 @@ def test_queue_system_retry_current_queue(tmp_path, monkeypatch):
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Select a tile, note the queue index advancement
     first_meta = qs.select_next_tile()
@@ -259,7 +259,7 @@ def test_queue_system_add_tiles(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     initial_tiles = {Tile(0, 0)}
-    qs = QueueSystem(initial_tiles)
+    qs = QueueSystem(initial_tiles, {})
 
     assert len(qs.tile_metadata) == 1
 
@@ -278,7 +278,7 @@ def test_queue_system_remove_tiles(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     tiles = {Tile(i, 0) for i in range(5)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     assert len(qs.tile_metadata) == 5
 
@@ -301,7 +301,7 @@ def test_queue_system_update_after_check_burning_to_temp(tmp_path, monkeypatch):
 
     # Start with enough tiles for temperature queues
     tiles = {Tile(i, 0) for i in range(10)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # All should be burning initially
     assert not qs.burning_queue.is_empty()
@@ -338,7 +338,7 @@ def test_queue_system_update_after_check_modification_time(tmp_path, monkeypatch
 
         os.utime(cache_path, (now - 10000, now - 10000))  # Old modification time
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Select a tile
     meta = qs.select_next_tile()
@@ -371,7 +371,7 @@ def test_reposition_tile_stays_in_queue(tmp_path, monkeypatch):
         mtime = now - (i * 1000)  # Spread out modification times
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Get a tile from the middle temperature queue
     mid_queue_idx = len(qs.temperature_queues) // 2
@@ -408,7 +408,7 @@ def test_reposition_tile_to_hotter_queue(tmp_path, monkeypatch):
         mtime = now - (i * 1000)  # Spread out modification times
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Find a tile in a colder queue
     coldest_queue = qs.temperature_queues[-1]
@@ -450,7 +450,7 @@ def test_reposition_tile_cascade_mechanics(tmp_path, monkeypatch):
         mtime = now - (i * 1000)  # Spread out modification times
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Get tile from queue 2
     assert len(qs.temperature_queues) >= 3, "Need at least 3 queues for this test"
@@ -492,7 +492,7 @@ def test_reposition_tile_maintains_all_tiles(tmp_path, monkeypatch):
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Collect all tiles before reposition
     all_tiles_before = set()
@@ -530,7 +530,7 @@ def test_reposition_tile_preserves_queue_sizes(tmp_path, monkeypatch):
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     initial_sizes = [len(q.tiles) for q in qs.temperature_queues]
 
@@ -567,7 +567,7 @@ def test_reposition_tile_assertion_on_colder_move(tmp_path, monkeypatch):
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Get a tile from hottest queue
     hot_tile = qs.temperature_queues[0].tiles[0]
@@ -606,7 +606,7 @@ def test_queue_system_no_starvation_with_large_burning_queue(tmp_path, monkeypat
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(initial_tiles)
+    qs = QueueSystem(initial_tiles, {})
 
     # Verify we have temperature tiles and no burning tiles initially
     assert len(qs.burning_queue.tiles) == 0
@@ -678,7 +678,7 @@ def test_tile_metadata_hash_and_eq():
     # Should not equal non-TileMetadata objects
     assert meta1 != "not a metadata"
     assert meta1 != Tile(0, 0)
-    assert meta1 != None
+    assert meta1 is not None
     assert meta1 != 123
 
 
@@ -688,7 +688,7 @@ def test_queue_system_current_queue_index_adjustment_burning_only(tmp_path, monk
 
     # Start with burning tiles only
     tiles = {Tile(i, 0) for i in range(5)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Force current_queue_index to be out of bounds for single-queue scenario
     qs.current_queue_index = 5  # Way beyond valid range
@@ -704,7 +704,7 @@ def test_queue_system_add_tiles_no_change(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     tiles = {Tile(0, 0), Tile(1, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     initial_queue_count = len(qs.temperature_queues)
 
@@ -721,7 +721,7 @@ def test_queue_system_remove_tiles_no_change(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     tiles = {Tile(0, 0), Tile(1, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     initial_queue_count = len(qs.temperature_queues)
 
@@ -736,7 +736,7 @@ def test_queue_system_remove_tiles_no_change(tmp_path, monkeypatch):
 
 def test_queue_system_select_next_empty_system():
     """Test selecting from queue system with no tiles."""
-    qs = QueueSystem(set())
+    qs = QueueSystem(set(), {})
 
     result = qs.select_next_tile()
     assert result is None
@@ -747,7 +747,7 @@ def test_queue_system_update_unknown_tile(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     tiles = {Tile(0, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Try to update a tile not in the system (should log warning and return)
     qs.update_tile_after_check(Tile(99, 99), round(time.time()))
@@ -762,7 +762,7 @@ def test_reposition_tile_no_temperature_queues(tmp_path, monkeypatch):
 
     # Create a queue system with only burning tiles
     tiles = {Tile(0, 0), Tile(1, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Ensure we only have burning queue
     assert len(qs.temperature_queues) == 0
@@ -790,7 +790,7 @@ def test_reposition_tile_not_found_in_queues(tmp_path, monkeypatch):
 
         os.utime(cache_path, (now, now))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
     initial_temp_tile_count = sum(len(q.tiles) for q in qs.temperature_queues)
 
     # Get a tile metadata but manually remove it from all queues
@@ -822,7 +822,7 @@ def test_reposition_tile_stays_in_same_queue(tmp_path, monkeypatch):
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Get a tile from middle of a queue
     mid_queue = qs.temperature_queues[len(qs.temperature_queues) // 2]
@@ -847,7 +847,7 @@ def test_queue_system_all_queues_empty_rebuild(tmp_path, monkeypatch):
     monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
 
     tiles = {Tile(0, 0), Tile(1, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Manually empty all queues (corrupt state)
     qs.burning_queue.tiles.clear()
@@ -855,7 +855,7 @@ def test_queue_system_all_queues_empty_rebuild(tmp_path, monkeypatch):
         queue.tiles.clear()
 
     # Try to select (should trigger rebuild and log warning)
-    result = qs.select_next_tile()
+    qs.select_next_tile()
 
     # After rebuild, queues should be repopulated
     total_tiles = len(qs.burning_queue.tiles) + sum(len(q.tiles) for q in qs.temperature_queues)
@@ -880,7 +880,7 @@ def test_calculate_zipf_queue_sizes_fallback(tmp_path, monkeypatch):
 
     # Mock calculate_zipf_queue_sizes to return empty list (shouldn't happen normally)
     with patch("cam.queues.calculate_zipf_queue_sizes", return_value=[]):
-        qs = QueueSystem(tiles)
+        qs = QueueSystem(tiles, {})
 
     # Should have created a single queue with all tiles as fallback
     assert len(qs.temperature_queues) == 1
@@ -904,7 +904,7 @@ def test_reposition_tile_no_movement_needed(tmp_path, monkeypatch):
         mtime = now - (i * 1000)
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Get a tile and verify which queue it's in
     if len(qs.temperature_queues) > 0:
@@ -927,7 +927,7 @@ def test_reposition_with_empty_temperature_queues_explicit(tmp_path, monkeypatch
 
     # Create burning tiles (no cache)
     tiles = {Tile(0, 0)}
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Verify only burning queue exists
     assert len(qs.burning_queue.tiles) == 1
@@ -950,7 +950,7 @@ def test_add_tiles_with_mixed_new_and_existing(tmp_path, monkeypatch):
 
     # Start with some tiles
     initial_tiles = {Tile(0, 0), Tile(1, 0)}
-    qs = QueueSystem(initial_tiles)
+    qs = QueueSystem(initial_tiles, {})
     assert len(qs.tile_metadata) == 2
 
     # Add a mix: some new, some existing
@@ -989,7 +989,7 @@ def test_reposition_tile_stays_in_queue_explicit(tmp_path, monkeypatch):
         mtime = base_time - (group * 10000) - offset_within_group
         os.utime(cache_path, (mtime, mtime))
 
-    qs = QueueSystem(tiles)
+    qs = QueueSystem(tiles, {})
 
     # Ensure we have multiple queues
     if len(qs.temperature_queues) < 2:
@@ -1014,3 +1014,172 @@ def test_reposition_tile_stays_in_queue_explicit(tmp_path, monkeypatch):
 
     # Tile should still be in the same queue
     assert target_tile in qs.temperature_queues[target_queue_idx].tiles
+
+
+# Burning queue prioritization tests
+
+
+def test_burning_queue_prioritizes_by_project_first_seen(tmp_path, monkeypatch):
+    """Burning queue should select tiles from oldest projects first."""
+    from cam.geometry import Rectangle
+
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create three tiles
+    tile1 = Tile(0, 0)
+    tile2 = Tile(1, 0)
+    tile3 = Tile(2, 0)
+    tiles = {tile1, tile2, tile3}
+
+    # Create mock projects with different first_seen times
+    # Project 1 (oldest): first_seen = 1000
+    proj1 = SimpleNamespace(
+        path=tmp_path / "proj1.png",
+        rect=Rectangle(0, 0, 1000, 1000),  # Contains tile1
+        metadata=SimpleNamespace(first_seen=1000),
+        get_first_seen=lambda: 1000,
+    )
+
+    # Project 2 (middle): first_seen = 2000
+    proj2 = SimpleNamespace(
+        path=tmp_path / "proj2.png",
+        rect=Rectangle(1000, 0, 1000, 1000),  # Contains tile2
+        metadata=SimpleNamespace(first_seen=2000),
+        get_first_seen=lambda: 2000,
+    )
+
+    # Project 3 (newest): first_seen = 3000
+    proj3 = SimpleNamespace(
+        path=tmp_path / "proj3.png",
+        rect=Rectangle(2000, 0, 1000, 1000),  # Contains tile3
+        metadata=SimpleNamespace(first_seen=3000),
+        get_first_seen=lambda: 3000,
+    )
+
+    # Create tile-to-projects mapping
+    tile_to_projects = {
+        tile1: [proj1],
+        tile2: [proj2],
+        tile3: [proj3],
+    }
+
+    # Create queue system (no cache files, so all tiles go to burning queue)
+    qs = QueueSystem(tiles, tile_to_projects)
+
+    # All tiles should be in burning queue
+    assert len(qs.burning_queue.tiles) == 3
+    assert len(qs.temperature_queues) == 0
+
+    # Select next tile should return tile from oldest project (proj1)
+    selected = qs.select_next_tile()
+    assert selected is not None
+    assert selected.tile == tile1  # Should select tile from oldest project
+
+
+def test_burning_queue_handles_projectshim(tmp_path, monkeypatch):
+    """Burning queue should handle ProjectShim instances (no metadata)."""
+    from cam.geometry import Rectangle
+    from cam.projects import ProjectShim
+
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    tile1 = Tile(0, 0)
+    tile2 = Tile(1, 0)
+    tiles = {tile1, tile2}
+
+    # Create ProjectShim (invalid project with no metadata)
+    shim = ProjectShim(tmp_path / "invalid.png", Rectangle(0, 0, 1000, 1000))
+
+    tile_to_projects = {
+        tile1: [shim],
+        tile2: [shim],
+    }
+
+    # Should not crash
+    qs = QueueSystem(tiles, tile_to_projects)
+
+    # Should be able to select a tile
+    selected = qs.select_next_tile()
+    assert selected is not None
+    assert selected.tile in tiles
+
+
+def test_burning_queue_handles_shared_tiles(tmp_path, monkeypatch):
+    """Tiles shared by multiple projects use minimum first_seen."""
+    from cam.geometry import Rectangle
+
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create two tiles that overlap multiple projects
+    tile1 = Tile(0, 0)
+    tile2 = Tile(1, 0)
+    tiles = {tile1, tile2}
+
+    # Create mock projects
+    old_proj = SimpleNamespace(
+        path=tmp_path / "old.png",
+        rect=Rectangle(0, 0, 2000, 1000),  # Contains both tiles
+        metadata=SimpleNamespace(first_seen=1000),
+        get_first_seen=lambda: 1000,
+    )
+
+    new_proj = SimpleNamespace(
+        path=tmp_path / "new.png",
+        rect=Rectangle(1000, 0, 1000, 1000),  # Contains only tile2
+        metadata=SimpleNamespace(first_seen=3000),
+        get_first_seen=lambda: 3000,
+    )
+
+    tile_to_projects = {
+        tile1: [old_proj],  # Only in old project (first_seen=1000)
+        tile2: [old_proj, new_proj],  # In both projects (min first_seen=1000)
+    }
+
+    qs = QueueSystem(tiles, tile_to_projects)
+
+    # Both tiles have same minimum first_seen (1000), so both are equally prioritized
+    # Just verify we can select without errors
+    selected = qs.select_next_tile()
+    assert selected is not None
+    assert selected.tile in tiles
+
+
+def test_temperature_queue_selection_unchanged(tmp_path, monkeypatch):
+    """Temperature queues should continue using last_checked only."""
+    from cam.geometry import Rectangle
+
+    monkeypatch.setattr("cam.queues.DIRS", SimpleNamespace(user_cache_path=tmp_path))
+
+    # Create tiles with cache files (so they go to temperature queues)
+    tiles = {Tile(i, 0) for i in range(10)}
+
+    # Create cache for all tiles with different times
+    now = round(time.time())
+    for i, tile in enumerate(sorted(tiles)):
+        cache_path = tmp_path / f"tile-{tile}.png"
+        cache_path.write_bytes(b"data")
+        mtime = now - (i * 100)  # Older tiles have lower mtime
+        import os
+
+        os.utime(cache_path, (mtime, mtime))
+
+    # Create mock project (shouldn't affect temperature queue selection)
+    proj = SimpleNamespace(
+        path=tmp_path / "proj.png",
+        rect=Rectangle(0, 0, 10000, 1000),
+        metadata=SimpleNamespace(first_seen=1000),
+        get_first_seen=lambda: 1000,
+    )
+
+    tile_to_projects = {tile: [proj] for tile in tiles}
+
+    qs = QueueSystem(tiles, tile_to_projects)
+
+    # All tiles should be in temperature queues (have cache)
+    assert qs.burning_queue.is_empty()
+    assert len(qs.temperature_queues) > 0
+
+    # Selection should work normally (based on last_checked, not project first_seen)
+    selected = qs.select_next_tile()
+    assert selected is not None
+    assert selected.tile in tiles

@@ -71,6 +71,8 @@ def main():
     log_file = DIRS.user_log_path / "cam.log"
     log_fmt = "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
     logger.add(log_file, rotation="10 MB", retention="7 days", level="DEBUG", format=log_fmt)
+    logger.info("============================================================================================")
+    logger.info("cam - Canvas Activity Monitor")
     logger.info(f"Logging to file: {log_file}")
     # set up main loop
     worker = Main()

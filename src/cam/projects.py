@@ -68,6 +68,10 @@ class ProjectShim:
         """No-op for invalid project files."""
         pass
 
+    def get_first_seen(self) -> int:
+        """Return sentinel value for invalid projects (far future, so they don't win selection)."""
+        return 1 << 58
+
 
 class Project(ProjectShim):
     """Represents a wplace project stored on disk that has been validated."""
@@ -115,6 +119,10 @@ class Project(ProjectShim):
         """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
         super().__init__(path, rect)
         self.metadata = self.load_metadata()
+
+    def get_first_seen(self) -> int:
+        """Return the timestamp when this project was first detected."""
+        return self.metadata.first_seen
 
     def __eq__(self, other) -> bool:
         return self.path == getattr(other, "path", ...)

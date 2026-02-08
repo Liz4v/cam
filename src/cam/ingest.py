@@ -119,7 +119,7 @@ class TileChecker:
         self._build_index(projects)
 
         # Initialize queue system with all indexed tiles
-        self.queue_system = QueueSystem(set(self.tiles.keys()))
+        self.queue_system = QueueSystem(set(self.tiles.keys()), self.tiles)
 
     def _build_index(self, projects: Iterable[ProjectShim]) -> None:
         """Index tiles to projects for quick lookup."""

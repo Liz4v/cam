@@ -147,13 +147,31 @@ class TileQueue:
     def is_empty(self) -> bool:
         return len(self.tiles) == 0
 
-    def select_next(self) -> Optional[TileMetadata]:
-        """Select tile with oldest last_checked time (0 = oldest)."""
+    def select_next(self, tile_to_projects: dict) -> Optional[TileMetadata]:
+        """Select tile with oldest last_checked time (0 = oldest).
+
+        For burning queue (where all last_checked = 0), uses project first_seen
+        timestamps to prioritize tiles from older projects.
+
+        Args:
+            tile_to_projects: Mapping of tiles to projects for burning queue prioritization
+        """
         if not self.tiles:
             return None
 
-        # Find tile with oldest last_checked (0 counts as oldest)
-        oldest = min(self.tiles, key=lambda t: t.last_checked)
+        # Temperature queues use standard last_checked selection
+        if self.temperature is not None:
+            oldest = min(self.tiles, key=lambda t: t.last_checked)
+            return oldest
+
+        # Burning queue: prioritize by oldest project first_seen
+        def tile_priority(tile_meta: TileMetadata) -> int:
+            """Returns min_first_seen for sorting."""
+            projects = tile_to_projects.get(tile_meta.tile, set())
+            min_first_seen = min((p.get_first_seen() for p in projects), default=1 << 58)
+            return min_first_seen
+
+        oldest = min(self.tiles, key=tile_priority)
         return oldest
 
     def remove_tile(self, tile_meta: TileMetadata) -> None:
@@ -181,12 +199,14 @@ class QueueSystem:
     the least-recently-checked tile within each queue.
     """
 
-    def __init__(self, tiles: set[Tile]):
+    def __init__(self, tiles: set[Tile], tile_to_projects: dict):
         """Initialize queue system with the given tiles.
 
         Args:
             tiles: Set of all tiles to track
+            tile_to_projects: Mapping of tiles to projects that contain them
         """
+        self.tile_to_projects = tile_to_projects
         self.tile_metadata: dict[Tile, TileMetadata] = {}
         self.burning_queue = TileQueue(temperature=None)
         self.temperature_queues: list[TileQueue] = []
@@ -374,7 +394,7 @@ class QueueSystem:
             attempts += 1
 
             if not queue.is_empty():
-                tile_meta = queue.select_next()
+                tile_meta = queue.select_next(self.tile_to_projects)
                 if tile_meta:
                     logger.debug(f"Examining tile {tile_meta.tile} from {queue}")
                     return tile_meta

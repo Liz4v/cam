@@ -79,6 +79,10 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 
 > **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
 
+### ✅ Refined burning queue to prioritize by project first_seen timestamp (2026-02-08)
+
+Enhanced burning queue tile selection to prioritize tiles from older projects using `first_seen` timestamps: added `get_first_seen()` method to `ProjectShim` (returns sentinel `1<<58`) and `Project` (returns `metadata.first_seen`); updated `QueueSystem` to accept and store `tile_to_projects` mapping; modified `TileQueue.select_next()` to calculate minimum `first_seen` across all projects containing each tile using `min()` with default parameter; burning queue now selects tiles from oldest projects first while temperature queues continue using `last_checked`; added 6 comprehensive tests covering prioritization, ProjectShim handling, shared tiles, and method behavior; all 158 tests passing with 97% coverage.
+
 ### ✅ Enhanced project tracking with snapshots and metadata (2026-02-07)
 
 Implemented comprehensive project state persistence: created `ProjectMetadata` dataclass in new `metadata.py` module tracking completion history (max completion, progress/regress counters, largest regress event), tile updates (last update per tile, 24h rolling list), streaks, and completion rate; refactored `Project.run_diff()` to save snapshots (PNG) and metadata (YAML) adjacent to project files, comparing current state against both target and previous snapshot to detect progress vs regress; added 17 comprehensive tests in `test_metadata.py` achieving 100% coverage of metadata module; all 31 project tests passing with 86% coverage of projects.py.

@@ -231,6 +231,47 @@ def test_invalid_project_file_created_after_init(tmp_path):
     assert invalid.has_been_modified()
 
 
+def test_projectshim_get_first_seen():
+    """Test that ProjectShim.get_first_seen returns sentinel value."""
+    from pathlib import Path
+
+    shim = projects.ProjectShim(Path("test.png"))
+
+    # Should return far future sentinel (1 << 58)
+    assert shim.get_first_seen() == (1 << 58)
+
+
+def test_project_get_first_seen(tmp_path, monkeypatch):
+    """Test that Project.get_first_seen returns metadata first_seen."""
+    from cam.palette import PALETTE
+
+    # Setup mocks
+    monkeypatch.setattr(
+        "cam.projects.DIRS", SimpleNamespace(user_pictures_path=tmp_path, user_cache_path=tmp_path / "cache")
+    )
+    (tmp_path / "cache").mkdir()
+
+    # Create a valid project file
+    wplace_dir = tmp_path / "wplace"
+    wplace_dir.mkdir()
+    path = wplace_dir / "proj_0_0_0_0.png"
+
+    # Create a paletted image
+    img = PALETTE.new((4, 4))
+    img.save(path)
+
+    # Open as project
+    proj = projects.Project.try_open(path)
+
+    # Should be valid Project, not ProjectShim
+    assert isinstance(proj, projects.Project)
+
+    # get_first_seen should return the metadata's first_seen
+    first_seen = proj.get_first_seen()
+    assert first_seen > 0
+    assert first_seen == proj.metadata.first_seen
+
+
 # Project.scan_directory tests
 
 
@@ -645,7 +686,6 @@ def test_run_diff_complete_status(tmp_path, monkeypatch):
 
 def test_update_single_tile_metadata_updates_when_newer(tmp_path, monkeypatch):
     """Test _update_single_tile_metadata updates when tile file is newer."""
-    from cam import DIRS
     from cam.geometry import Tile
 
     # Create a project
@@ -688,7 +728,6 @@ def test_update_single_tile_metadata_updates_when_newer(tmp_path, monkeypatch):
 
 def test_update_single_tile_metadata_skips_when_not_newer(tmp_path, monkeypatch):
     """Test _update_single_tile_metadata skips update when tile not newer."""
-    from cam import DIRS
     from cam.geometry import Tile
 
     # Create a project
@@ -734,7 +773,6 @@ def test_update_single_tile_metadata_skips_when_not_newer(tmp_path, monkeypatch)
 
 def test_update_single_tile_metadata_handles_missing_file(tmp_path, monkeypatch):
     """Test _update_single_tile_metadata handles nonexistent tile file."""
-    from cam import DIRS
     from cam.geometry import Tile
 
     # Create a project
