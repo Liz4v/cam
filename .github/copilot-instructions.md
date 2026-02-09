@@ -58,6 +58,7 @@ uv run cam
   - `metadata/` — project completion tracking (YAML)
   - `logs/` — application logs
   - `data/` — future bot data and state
+- **Design rationale:** The default `./cam-data` location allows running cam from the project root during development, keeping all data files easily accessible for inspection from IDE and AI agents. This simplifies debugging, testing, and data analysis without requiring path configuration.
 - Access configuration via `get_config()` from `config.py`
 - CONFIG singleton is lazily initialized on first access
 - All subdirectories auto-created by `load_config()` on startup

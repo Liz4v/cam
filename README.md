@@ -73,7 +73,9 @@ All cam data lives in a unified directory structure under `cam-home` (default: `
 - **`logs/`** — Application logs (`cam.log` with 10 MB rotation and 7-day retention)
 - **`data/`** — Reserved for future bot data and state
 
-**Recommendation:** Run cam from a dedicated directory (e.g., create `~/cam-workspace/` and run cam from there) so `./cam-data` stays organized.
+**Development workflow:** The default `./cam-data` location is designed to work seamlessly when running cam from the project root directory during development. This keeps all data files easily accessible for inspection from your IDE and AI agents, making debugging and analysis straightforward.
+
+**Production deployment:** For production use, it is recommended to set `--cam-home` explicitly.
 
 ## Development
 
