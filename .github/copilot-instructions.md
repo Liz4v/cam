@@ -16,20 +16,6 @@ cam (Canvas Activity Monitor) is a change tracker for WPlace paint projects. It 
 - `README.md` for user-facing documentation and external resources/links
 - `tests/` for unit tests and test patterns
 
-## Development Environment
-
-**PowerShell Version:** On Windows, the default shell is PowerShell 5.1 (Desktop Edition). This version has some syntax and feature limitations compared to modern PowerShell 7+ (Core), so be mindful of these when running commands or scripts.
-
-**Important PowerShell 5.1 Limitations:**
-- **Does NOT support `&&` for command chaining** — use semicolons `;` instead
-- **Does NOT support `||` for conditional execution** — use proper PowerShell syntax with `;` or `if` statements
-- This is Windows PowerShell (Desktop Edition), not PowerShell 7+ (Core)
-- Some cmdlets and features differ from modern PowerShell versions
-
-**Command Chaining Examples:**
-- ✅ Correct: `cd src; python script.py`
-- ❌ Wrong: `cd src && python script.py` (will fail with syntax error)
-
 ## Quickstart (developer)
 
 See the `uv` documentation: https://pypi.org/project/uv/
