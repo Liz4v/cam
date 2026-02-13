@@ -34,26 +34,6 @@ Create a Discord bot that integrates with pixel-hawk to provide real-time projec
 
 ---
 
-### Detect and alarm on project regression (griefing/attacks)
-
-**Status:** Backlog
-**Priority:** Low
-
-**Description:**
-When project progress changes are detected, analyze whether the change represents forward progress (more pixels matching the project) or regression (fewer pixels matching). A regression likely indicates that the project is being attacked/griefed and should trigger an alarm or notification.
-
-**Implementation Considerations:**
-- Need to track project completion percentage over time
-- Define threshold for what constitutes a "significant" regression worth alarming on
-- Decide on alarm mechanism (log level, notification, etc.)
-- May want to distinguish between minor griefing and coordinated attacks based on regression magnitude
-
-**Related Code:**
-- `Project.run_diff()` in `src/pixel_hawk/projects.py` (where diffs are computed)
-- Progress tracking would need to be added to the `Project` class
-
----
-
 ### Memory profiling and optimization for Raspberry Pi deployment
 
 **Status:** Backlog
@@ -78,6 +58,10 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 ## Completed
 
 > **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
+
+### ✅ Detect project regression / griefing (2026-02-12)
+
+Implemented regression detection in the core diff pipeline: `ProjectMetadata.compare_snapshots()` counts per-pixel progress and regress on every diff, `process_diff()` accumulates lifetime `total_progress`/`total_regress` counters, tracks `largest_regress_pixels`/`largest_regress_time` for worst-event recording, and maintains change streaks (`progress`/`regress`/`mixed`) to identify sustained attacks. Log messages include `[+N/-N]` change indicators and streak info. Alarm/notification functionality deferred to the Discord bot (see `DISCORD_BOT_TASKS.md`).
 
 ### ✅ Configurable directory paths with unified pixel-hawk-home structure (2026-02-08)
 

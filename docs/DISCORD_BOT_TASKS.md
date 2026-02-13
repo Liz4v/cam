@@ -568,13 +568,21 @@ User-facing documentation for setting up and using the Discord bot.
 **Priority:** Low
 
 **Description:**
-Integrate with pixel-hawk's griefing detection (when implemented) to send Discord alerts when projects are attacked.
+Send Discord alerts when pixel-hawk detects project regression (griefing/attacks). The core detection is already implemented in `ProjectMetadata` — this task adds the notification layer.
+
+**Available Data (from `ProjectMetadata`):**
+- `total_regress` / `total_progress` — lifetime pixel counters
+- `largest_regress_pixels` / `largest_regress_time` — worst single event
+- `change_streak_type` / `change_streak_count` — sustained regress detection
+- Per-diff `regress_pixels` count from `compare_snapshots()`
 
 **Features:**
+- Define configurable threshold for "significant" regression worth alerting on
+- Distinguish minor griefing from coordinated attacks based on regression magnitude and streak length
 - Mention role when regression detected
 - Show before/after comparison
 - Link to WPlace coordinates
-- Severity indicators
+- Severity indicators (e.g., warning vs critical based on threshold)
 
 ---
 
