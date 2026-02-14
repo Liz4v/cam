@@ -4,7 +4,6 @@ ProjectMetadata encapsulates all project state and statistics:
 - Completion tracking: max completion achieved, remaining pixels, percentages
 - Progress/regress detection: compares snapshots to identify pixel changes
 - Tile update tracking: maintains last-update timestamps and 24-hour rolling history
-- Streak tracking: consecutive checks with same outcome (progress/regress/nochange)
 - Rate calculation: pixels per hour based on recent activity window
 - Largest regress event: records worst griefing incident
 - Missing tiles flag: indicates if any required tiles are absent from cache
@@ -74,12 +73,6 @@ class ProjectMetadata:
     largest_regress_pixels: int = 0
     largest_regress_time: int = 0
 
-    # Change streak (progress or regress events; nochange events do not break this)
-    change_streak_type: str = "none"  # "progress", "regress", "mixed", "none"
-    change_streak_count: int = 0
-    # Nochange streak (consecutive nochange events; any change event breaks this)
-    nochange_streak_count: int = 0
-
     # Rate tracking (recent window)
     recent_rate_pixels_per_hour: float = 0.0
     recent_rate_window_start: int = 0  # Start of current rate measurement window
@@ -135,11 +128,6 @@ class ProjectMetadata:
                 "pixels": self.largest_regress_pixels,
                 "timestamp": self.largest_regress_time,
             },
-            "streak": {
-                "change_type": self.change_streak_type,
-                "change_count": self.change_streak_count,
-                "nochange_count": self.nochange_streak_count,
-            },
             "recent_rate": {
                 "pixels_per_hour": self.recent_rate_pixels_per_hour,
                 "window_start": self.recent_rate_window_start,
@@ -162,7 +150,6 @@ class ProjectMetadata:
         max_comp = data.get("max_completion", {})
         totals = data.get("totals", {})
         largest_reg = data.get("largest_regress", {})
-        streak = data.get("streak", {})
         rate = data.get("recent_rate", {})
         tile_updates = data.get("tile_updates", {})
         cache_state = data.get("cache_state", {})
@@ -183,9 +170,6 @@ class ProjectMetadata:
             total_regress=totals.get("regress_pixels", 0),
             largest_regress_pixels=largest_reg.get("pixels", 0),
             largest_regress_time=largest_reg.get("timestamp", 0),
-            change_streak_type=streak.get("change_type", "none"),
-            change_streak_count=streak.get("change_count", 0),
-            nochange_streak_count=streak.get("nochange_count", 0),
             recent_rate_pixels_per_hour=rate.get("pixels_per_hour", 0.0),
             recent_rate_window_start=rate.get("window_start", 0),
             tile_last_update=tile_updates.get("last_update_by_tile", {}),
@@ -259,30 +243,6 @@ class ProjectMetadata:
             self.largest_regress_pixels = regress_pixels
             self.largest_regress_time = timestamp
 
-    def update_streak(self, progress_pixels: int, regress_pixels: int) -> None:
-        """Update streak based on progress and regress pixel counts.
-
-        Change streaks (progress/regress/mixed) continue across nochange events.
-        Nochange streaks (no pixel changes) reset when any change occurs.
-        """
-        if progress_pixels == 0 and regress_pixels == 0:
-            # Nochange event: increment nochange streak, don't touch change streak
-            self.nochange_streak_count += 1
-            return
-        elif regress_pixels == 0:
-            event = "progress"
-        elif progress_pixels == 0:
-            event = "regress"
-        else:
-            event = "mixed"
-
-        self.nochange_streak_count = 0  # Break nochange streak
-        if self.change_streak_type == event:
-            self.change_streak_count += 1  # Continue existing streak
-        else:  # New streak type
-            self.change_streak_type = event
-            self.change_streak_count = 1
-
     def update_rate(self, progress_pixels: int, regress_pixels: int, timestamp: int) -> None:
         """Update completion rate (pixels per hour)."""
         if self.recent_rate_window_start > 0:
@@ -345,9 +305,6 @@ class ProjectMetadata:
         # Update largest regress
         self.update_regress(regress_pixels, timestamp)
 
-        # Update streak (before checking completion so streak reflects final progress)
-        self.update_streak(progress_pixels, regress_pixels)
-
         # Check for completion
         if max(remaining) == 0:
             self.last_log_message = f"{self.name}: Complete! {num_target} pixels total."
@@ -368,12 +325,6 @@ class ProjectMetadata:
 
         if progress_pixels > 0 or regress_pixels > 0:
             status_parts.append(f"[+{progress_pixels}/-{regress_pixels}]")
-
-        if self.change_streak_count > 1:
-            status_parts.append(f"({self.change_streak_type} x{self.change_streak_count})")
-
-        if self.nochange_streak_count > 0:
-            status_parts.append(f"(nochange x{self.nochange_streak_count})")
 
         status_parts.append(f"ETA: {days}d{hours}h to {when}")
 

@@ -222,7 +222,6 @@ class Project(ProjectShim):
     def run_nochange(self) -> None:
         self.metadata.last_check = round(time.time())
         self.metadata.prune_old_tile_updates()  # regular cleanup task
-        self.metadata.update_streak(0, 0)  # This will increment nochange streak and reset change streak
         self.save_metadata()
 
     def _update_single_tile_metadata(self, tile: Tile) -> None:

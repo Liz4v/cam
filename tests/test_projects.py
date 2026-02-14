@@ -408,8 +408,6 @@ def test_metadata_to_dict_and_from_dict():
     meta.max_completion_percent = 75.5
     meta.total_progress = 50
     meta.total_regress = 5
-    meta.streak_type = "progress"
-    meta.streak_count = 3
     meta.tile_last_update = {"1_2": 12345, "3_4": 67890}
     meta.tile_updates_24h = [("1_2", 12345), ("3_4", 67890)]
 
@@ -424,9 +422,6 @@ def test_metadata_to_dict_and_from_dict():
     assert meta2.max_completion_percent == meta.max_completion_percent
     assert meta2.total_progress == meta.total_progress
     assert meta2.total_regress == meta.total_regress
-    assert meta2.change_streak_type == meta.change_streak_type
-    assert meta2.change_streak_count == meta.change_streak_count
-    assert meta2.nochange_streak_count == meta.nochange_streak_count
     assert meta2.tile_last_update == meta.tile_last_update
     assert meta2.tile_updates_24h == meta.tile_updates_24h
 
@@ -498,8 +493,6 @@ def test_project_metadata_save_and_load(tmp_path):
     # Modify metadata
     proj.metadata.max_completion_pixels = 42
     proj.metadata.total_progress = 100
-    proj.metadata.change_streak_type = "progress"
-    proj.metadata.change_streak_count = 5
 
     # Save metadata
     proj.save_metadata()
@@ -509,8 +502,6 @@ def test_project_metadata_save_and_load(tmp_path):
     proj2 = projects.Project(path, rect)
     assert proj2.metadata.max_completion_pixels == 42
     assert proj2.metadata.total_progress == 100
-    assert proj2.metadata.change_streak_type == "progress"
-    assert proj2.metadata.change_streak_count == 5
 
 
 def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
@@ -617,8 +608,6 @@ def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
 
     # Should have detected 1 pixel of progress
     assert proj.metadata.total_progress == initial_progress + 1
-    assert proj.metadata.change_streak_type == "progress"
-    assert proj.metadata.change_streak_count >= 1
 
 
 def test_run_diff_regress_detection(tmp_path, monkeypatch):
@@ -651,7 +640,6 @@ def test_run_diff_regress_detection(tmp_path, monkeypatch):
 
     # Should have detected regress
     assert proj.metadata.total_regress == 1
-    assert proj.metadata.change_streak_type == "regress"
     assert proj.metadata.largest_regress_pixels == 1
 
 
@@ -671,8 +659,8 @@ def test_run_diff_complete_status(tmp_path, monkeypatch):
 
     proj.run_diff()
 
-    # Should detect as complete - no pixels to fill
-    assert proj.metadata.nochange_streak_count >= 1
+    # Should detect as complete
+    assert "Complete" in proj.metadata.last_log_message
 
 
 def test_update_single_tile_metadata_updates_when_newer(tmp_path, monkeypatch, setup_config):

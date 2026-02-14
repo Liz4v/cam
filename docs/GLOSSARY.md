@@ -114,7 +114,7 @@ No pixel changes detected between checks.
 A PNG image saved alongside a project that captures the previous canvas state. Used to detect progress/regress by comparing the current state against the previous state.
 
 ### Metadata
-Project statistics and history stored in YAML files alongside project images. Tracks completion, progress/regress totals, streaks, rates, and tile update times.
+Project statistics and history stored in YAML files alongside project images. Tracks completion, progress/regress totals, rates, and tile update times.
 
 ### Completion Percentage
 The percentage of target pixels that are correctly placed on the canvas.

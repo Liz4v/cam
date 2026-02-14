@@ -58,7 +58,7 @@ uv run pixel-hawk
 - `Project` (in `projects.py`) discovers project PNGs placed in the configured `projects_dir`. Filenames must include 4 coordinates in format `*_<tx>_<ty>_<px>_<py>.png` (tile x, tile y, pixel x 0-999, pixel y 0-999) and must use the project's palette.
 - Invalid files (missing coordinates, bad palette) are tracked as `ProjectShim` instances to avoid repeated load attempts.
 - `PALETTE` (in `palette.py`) enforces and converts images to the project palette (first color treated as transparent).
-- `ProjectMetadata` (in `metadata.py`) tracks completion history, progress/regress statistics, streaks, and rates. Persists to YAML files in `metadata_dir` (separate from project files).
+- `ProjectMetadata` (in `metadata.py`) tracks completion history, progress/regress statistics, and rates. Persists to YAML files in `metadata_dir` (separate from project files).
 - `Main` (in `main.py`) runs the polling loop: `TileChecker.check_next_tile()` handles tile selection and checking, `check_projects()` scans for new/modified/deleted project files. On tile changes it diffs updated tiles with project images and logs progress.
 - Queue system tracks tile metadata (last checked, last modified) and repositions tiles surgically when modification times change. When a tile moves to a hotter queue, coldest tiles cascade down through intervening queues to maintain Zipf distribution sizes.
 
@@ -71,7 +71,7 @@ uv run pixel-hawk
 - `src/pixel_hawk/ingest.py` — `TileChecker` (tile monitoring orchestration), `has_tile_changed()` (tile download), `stitch_tiles()` (canvas assembly)
 - `src/pixel_hawk/palette.py` — palette enforcement + helper `PALETTE`
 - `src/pixel_hawk/projects.py` — `Project` model (orchestrates diffs), `ProjectShim` shim (invalid files)
-- `src/pixel_hawk/metadata.py` — `ProjectMetadata` (completion tracking, statistics, streaks, YAML persistence)
+- `src/pixel_hawk/metadata.py` — `ProjectMetadata` (completion tracking, statistics, YAML persistence)
 - `src/pixel_hawk/queues.py` — `QueueSystem`, temperature-based tile queues with Zipf distribution, tile metadata tracking
 
 ## Architecture conventions
