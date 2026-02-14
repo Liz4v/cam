@@ -1,20 +1,20 @@
-from pixel_hawk.palette import PALETTE, ColorNotInPalette
+from pixel_hawk.palette import PALETTE
 
 
 def test_lookup_transparent():
     # alpha 0 should map to palette index 0
-    assert PALETTE.lookup((1, 2, 3, 0)) == 0
+    report = {}
+    assert PALETTE.lookup(report, (1, 2, 3, 0)) == 0
+    assert report == {}
 
 
-def test_lookup_unknown_color_raises():
+def test_lookup_unknown_color_tracked():
     # use an unlikely RGB value that's not in palette
-    rgb = (250, 251, 252, 255)
-    try:
-        PALETTE.lookup(rgb)
-        raised = False
-    except ColorNotInPalette:
-        raised = True
-    assert raised
+    report = {}
+    result = PALETTE.lookup(report, (250, 251, 252, 255))
+    assert result == 0
+    rgb = (250 << 16) | (251 << 8) | 252
+    assert report == {rgb: 1}
 
 
 def test_new_creates_paletted_image():
@@ -38,16 +38,18 @@ def test_ensure_converts_rgba_and_lookup_valid_color():
     pal = PALETTE.ensure(im)
     assert pal.mode == "P"
     # ensure lookup for the color returns a non-zero palette index
-    assert PALETTE.lookup((r, g, b, 255)) != 0
+    report = {}
+    assert PALETTE.lookup(report, (r, g, b, 255)) != 0
+    assert report == {}
 
 
-def test_open_image_with_existing_paletted_file(tmp_path):
+def test_open_file_with_existing_paletted_file(tmp_path):
     path = tmp_path / "pal.png"
     im = PALETTE.new((2, 2))
     im.putdata([0, 1, 2, 3])
     im.save(path)
 
-    opened = PALETTE.open_image(path)
+    opened = PALETTE.open_file(path)
     assert opened.mode == "P"
 
 
@@ -67,5 +69,7 @@ def test_lookup_wrong_teal_mapping():
     r = (teal >> 16) & 0xFF
     g = (teal >> 8) & 0xFF
     b = teal & 0xFF
-    idx = PALETTE.lookup((r, g, b, 255))
+    report = {}
+    idx = PALETTE.lookup(report, (r, g, b, 255))
     assert isinstance(idx, int)
+    assert report == {}

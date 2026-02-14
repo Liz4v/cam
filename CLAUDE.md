@@ -96,7 +96,7 @@ This project embraces core principles from PEP 20 ("The Zen of Python"):
 - Preserve logging via `loguru` rather than replacing with ad-hoc prints.
 - Image handling:
   - Use `PALETTE.ensure(image)` for conversion; no palette manipulation outside `palette.py`.
-  - Always close PIL `Image` objects; prefer `with Image.open(...) as im:` or the helper patterns already present.
+  - Always close PIL `Image` objects; prefer `with PALETTE.open_*(...) as im:` or the helper patterns already present.
 - Time and date: prefer `round(time.time())` for timestamps to get integer seconds, which simplifies metadata and logging. Avoid using raw `time.time()` as well as `datetime` to keep things simple and consistent.
 - Project state: Projects are discovered from the filesystem on each polling cycle and kept in memory during runtime (metadata only).
 - Error handling: prefer non-fatal logging (warnings/debug) and avoid raising unexpected exceptions in the polling loop.

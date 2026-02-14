@@ -99,12 +99,12 @@ def test_run_diff_branches(monkeypatch, tmp_path):
         def get_flattened_data(self):
             return self.data
 
-    monkeypatch.setattr(PALETTE, "open_image", lambda path: CM(target))
+    monkeypatch.setattr(PALETTE, "open_file", lambda path: CM(target))
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: CM(target))
     proj.run_diff()  # should early-return without error
 
     # Case 2: progress branch (different data)
-    monkeypatch.setattr(PALETTE, "open_image", lambda path: CM(bytes([0, 1, 2])))
+    monkeypatch.setattr(PALETTE, "open_file", lambda path: CM(bytes([0, 1, 2])))
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: CM(bytes([2, 3, 4])))
     proj.run_diff()  # should run through progress logging
 
@@ -122,12 +122,12 @@ def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
     target = _paletted_image((4, 4), value=1)
 
     # Case: current equals target -> complete branch
-    monkeypatch.setattr(PALETTE, "open_image", lambda path: target)
+    monkeypatch.setattr(PALETTE, "open_file", lambda path: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((4, 4), value=1))
     p.run_diff()  # should hit the 'Complete.' branch without error
 
     # Case: current different -> remaining/progress calculation path
-    monkeypatch.setattr(PALETTE, "open_image", lambda path: target)
+    monkeypatch.setattr(PALETTE, "open_file", lambda path: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((4, 4), value=0))
     p.run_diff()  # should compute remaining and log progress without error
 
@@ -555,7 +555,7 @@ def test_run_diff_with_metadata_tracking(tmp_path, monkeypatch):
     current = _paletted_image((4, 4), value=0)
     current.putpixel((0, 0), 1)  # correct
 
-    monkeypatch.setattr(PALETTE, "open_image", lambda path_arg: target)
+    monkeypatch.setattr(PALETTE, "open_file", lambda path_arg: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current)
 
     proj.run_diff()
@@ -584,14 +584,14 @@ def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
     current1.putpixel((0, 0), 1)
 
     # Monkeypatch to return target for project path, let snapshots work normally
-    original_open_image = PALETTE.open_image
+    original_open_file = PALETTE.open_file
 
-    def open_image_mock(path_arg):
+    def open_file_mock(path_arg):
         if ".snapshot." in str(path_arg):
-            return original_open_image(path_arg)  # Use real implementation for snapshots
+            return original_open_file(path_arg)  # Use real implementation for snapshots
         return target
 
-    monkeypatch.setattr(PALETTE, "open_image", open_image_mock)
+    monkeypatch.setattr(PALETTE, "open_file", open_file_mock)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current1)
 
     proj.run_diff()
@@ -625,7 +625,7 @@ def test_run_diff_regress_detection(tmp_path, monkeypatch):
     current1 = _paletted_image((4, 4), value=0)
     current1.putpixel((0, 0), 1)
 
-    monkeypatch.setattr(PALETTE, "open_image", lambda path_arg: target)
+    monkeypatch.setattr(PALETTE, "open_file", lambda path_arg: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current1)
 
     proj.run_diff()
@@ -654,7 +654,7 @@ def test_run_diff_complete_status(tmp_path, monkeypatch):
     target = _paletted_image((2, 2), value=1)
     current = _paletted_image((2, 2), value=1)
 
-    monkeypatch.setattr(PALETTE, "open_image", lambda path_arg: target)
+    monkeypatch.setattr(PALETTE, "open_file", lambda path_arg: target)
     monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current)
 
     proj.run_diff()

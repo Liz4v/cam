@@ -522,7 +522,7 @@ def test_stitch_tiles_warns_on_missing_and_returns_paletted_image(tmp_path, caps
 def test_palette_lookup_transparent_and_ensure():
     """Test that transparent pixel maps to palette index 0."""
     # transparent pixel should map to 0
-    idx = projects.PALETTE.lookup((0, 0, 0, 0))
+    idx = projects.PALETTE.lookup({}, (0, 0, 0, 0))
     assert idx == 0
 
 

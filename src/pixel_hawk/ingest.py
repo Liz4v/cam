@@ -11,7 +11,6 @@ tile per polling cycle, selecting round-robin between queues and choosing the
 least-recently-checked tile within each queue.
 """
 
-import io
 import os
 import time
 from email.utils import formatdate, parsedate_to_datetime
@@ -76,7 +75,7 @@ def has_tile_changed(tile: Tile) -> tuple[bool, int]:
         last_modified_timestamp = int(time.time())
 
     try:
-        img = Image.open(io.BytesIO(data))
+        img = PALETTE.open_bytes(data)
     except Exception as e:
         logger.debug(f"Tile {tile}: image decode failed: {e}")
         return False, 0
@@ -98,7 +97,7 @@ def stitch_tiles(rect: Rectangle) -> Image.Image:
         if not cache_path.exists():
             logger.debug(f"{tile}: Tile missing from cache, leaving transparent")
             continue
-        with Image.open(cache_path) as tile_image:
+        with PALETTE.open_file(cache_path) as tile_image:
             offset = tile.to_point() - rect.point
             image.paste(tile_image, Rectangle.from_point_size(offset, Size(1000, 1000)))
     return image

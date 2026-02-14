@@ -28,7 +28,7 @@ from .config import get_config
 from .geometry import Point, Rectangle, Size, Tile
 from .ingest import stitch_tiles
 from .metadata import DiffStatus, ProjectMetadata
-from .palette import PALETTE, ColorNotInPalette
+from .palette import PALETTE, ColorsNotInPalette
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -99,9 +99,9 @@ class Project(ProjectShim):
 
         try:
             # Convert now, but close immediately. We'll reopen later as needed.
-            with PALETTE.open_image(path) as image:
+            with PALETTE.open_file(path) as image:
                 size = Size(*image.size)
-        except ColorNotInPalette as e:
+        except ColorsNotInPalette as e:
             logger.warning(f"{path.name}: Color not in palette: {e}")
             path.rename(path.with_suffix(".invalid.png"))
             return ProjectShim(path)
@@ -174,7 +174,7 @@ class Project(ProjectShim):
         if not self.snapshot_path.exists():
             return nullcontext()  # No snapshot yet, caller should handle as needed
         try:
-            return PALETTE.open_image(self.snapshot_path)
+            return PALETTE.open_file(self.snapshot_path)
         except Exception as e:
             logger.warning(f"Failed to load snapshot for {self.path.name}: {e}")
             return nullcontext()
@@ -193,7 +193,7 @@ class Project(ProjectShim):
             self.metadata.has_missing_tiles = self._has_missing_tiles()
 
         # Load target project image
-        with PALETTE.open_image(self.path) as target:
+        with PALETTE.open_file(self.path) as target:
             target_data = get_flattened_data(target)
 
         # Load previous snapshot before overwriting
