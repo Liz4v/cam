@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+.claude/
 .venv/
+.vscode/
 .*cache/
 pixel-hawk-data/

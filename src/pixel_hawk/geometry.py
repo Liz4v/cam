@@ -10,7 +10,10 @@ All types support conversion between tile space and pixel space.
 """
 
 from functools import cache
+from math import asinh, atan, degrees, pi, radians, sinh, tan
 from typing import NamedTuple
+
+CANVAS_SIZE = 2048 * 1000
 
 
 class Tile(NamedTuple):
@@ -47,6 +50,12 @@ class Point(NamedTuple):
         tx, px = divmod(self.x, 1000)
         ty, py = divmod(self.y, 1000)
         return tx, ty, px, py
+
+    def to_geo(self) -> GeoPoint:
+        # Inverse Web Mercator projection on a 2048000x2048000 pixel canvas.
+        longitude = self.x / CANVAS_SIZE * 360 - 180
+        latitude = degrees(atan(sinh(pi * (1 - 2 * self.y / CANVAS_SIZE))))
+        return GeoPoint(latitude, longitude)
 
     def __str__(self) -> str:
         return "_".join(map(str, self.to4()))
@@ -114,3 +123,15 @@ class Rectangle(NamedTuple):
         right = (self.right + 999) // 1000
         bottom = (self.bottom + 999) // 1000
         return frozenset(Tile(tx, ty) for tx in range(left, right) for ty in range(top, bottom))
+
+
+class GeoPoint(NamedTuple):
+    latitude: float
+    longitude: float
+
+    def to_pixel(self) -> Point:
+        """Forward Web Mercator projection: geo coordinates to pixel coordinates."""
+        x = (self.longitude + 180) / 360 * CANVAS_SIZE
+        lat_rad = radians(self.latitude)
+        y = (1 - asinh(tan(lat_rad)) / pi) / 2 * CANVAS_SIZE
+        return Point(round(x), round(y))
