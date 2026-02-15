@@ -1,36 +1,29 @@
 # Pixel Hawk Tasks
 
-## Active
-
-No active tasks.
-
----
-
 ## Backlog
+
+### Migrate data to SQLite
+
+**Status:** Backlog
+**Priority:** High
+
+**Description:**
+Data is currently in YAML disk files. Migrate to SQLite, ORM-mapped using Tortoise ORM. Include support for future schema migrations. Rename `ProjectMetadata` to `ProjectInfo` and use it as an Active Record. Expand `DiffResult` to `HistoryChange` and create a new table with that information to track history changes.
 
 ### Discord Bot for project tracking and notifications
 
-**Status:** Planning
+**Status:** Backlog
 **Priority:** Medium
 
 **Description:**
-Create a Discord bot that integrates with pixel-hawk to provide real-time project monitoring through Discord. Users can add and manage projects via Discord commands, and the bot maintains living status messages that update as progress changes. Bot will only operate in trusted servers.
+Create a Discord bot that integrates with pixel-hawk to provide real-time project monitoring through Discord. Users can add and manage projects via Discord commands under a quota of watched tiles, and the bot maintains living status messages that update as progress changes. Bot will only operate in trusted servers.
 
 **Key Features:**
 - Project management through Discord commands (`/hawk add`, `/hawk remove`, `/hawk list`)
 - Automatic status message updates showing progress, last change, timestamps
-- Server whitelist for security
+- Server & user whitelist for security
 - Rich embeds with progress bars and visual indicators
 - Rate limiting to respect Discord API constraints
-
-**Documentation:**
-- See `DISCORD_BOT_DESIGN.md` for architecture and technical design
-- See `DISCORD_BOT_TASKS.md` for detailed implementation task breakdown
-
-**Related Code:**
-- Will integrate with `Project` class in `src/pixel_hawk/projects.py`
-- Will reuse `PALETTE` from `src/pixel_hawk/palette.py` for image validation
-- Will use `get_config()` from `src/pixel_hawk/config.py` for directory paths
 
 ---
 
@@ -47,7 +40,6 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 - Profile tile stitching in `stitch_tiles()` which creates full project-sized images
 - Profile diff computation in `Project.run_diff()` which creates multiple byte arrays (`get_flattened_data()`, `bytes(newdata)`, etc.)
 - Consider optimizations: stream diff computation to avoid large intermediate byte arrays, crop before stitching to only stitch needed pixels
-- Project image caching already fixed (2026-02-07) - images now properly closed after each diff via `with` blocks
 
 **Related Code:**
 - `Project.run_diff()` in `src/pixel_hawk/projects.py`
@@ -61,7 +53,7 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 
 ### ✅ Detect project regression / griefing (2026-02-12)
 
-Implemented regression detection in the core diff pipeline: `ProjectMetadata.compare_snapshots()` counts per-pixel progress and regress on every diff, `process_diff()` accumulates lifetime `total_progress`/`total_regress` counters, tracks `largest_regress_pixels`/`largest_regress_time` for worst-event recording, and maintains change streaks (`progress`/`regress`/`mixed`) to identify sustained attacks. Log messages include `[+N/-N]` change indicators and streak info. Alarm/notification functionality deferred to the Discord bot (see `DISCORD_BOT_TASKS.md`).
+Implemented regression detection in the core diff pipeline: `ProjectMetadata.compare_snapshots()` counts per-pixel progress and regress on every diff, `process_diff()` accumulates lifetime `total_progress`/`total_regress` counters, tracks `largest_regress_pixels`/`largest_regress_time` for worst-event recording, and maintains change streaks (`progress`/`regress`/`mixed`) to identify sustained attacks. Log messages include `[+N/-N]` change indicators and streak info. Alarm/notification functionality deferred to the Discord bot.
 
 ### ✅ Configurable directory paths with unified pixel-hawk-home structure (2026-02-08)
 

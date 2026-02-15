@@ -107,9 +107,6 @@ Class that orchestrates tile monitoring: selects tiles via QueueSystem, calls ha
 ### Project Discovery
 Scanning the `wplace/` pictures directory for PNG files with valid coordinate information in their filenames.
 
-### Nochange
-No pixel changes detected between checks.
-
 ### Snapshot
 A PNG image saved alongside a project that captures the previous canvas state. Used to detect progress/regress by comparing the current state against the previous state.
 
@@ -128,13 +125,7 @@ The best completion state ever achieved for a project (lowest remaining pixel co
 ### Diff Status
 The current state of a project: NOT_STARTED (no pixels placed), IN_PROGRESS (partially complete), or COMPLETE (fully done).
 
-## Streaks & Statistics
-
-### Change Streak
-Count of consecutive polling cycles where progress or regress was detected. Types: "progress", "regress", "mixed", or "none".
-
-### Nochange Streak
-Count of consecutive polling cycles where no changes were detected. Broken by any change event.
+## Statistics
 
 ### Rate Tracking
 Calculation of pixels per hour based on recent activity within a measurement window (typically 24 hours).
