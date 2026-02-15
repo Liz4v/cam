@@ -103,7 +103,7 @@ def process_diff(info: ProjectInfo, current_data: bytes, target_data: bytes, pre
 
     # Check if project not started (all target pixels remain, and no previous snapshot)
     if not prev_data and remaining == target_data:
-        info.last_log_message = f"{info.name}: Not started"
+        info.last_log_message = f"{info.owner.name}/{info.name}: Not started"
         return HistoryChange(
             project=info,
             timestamp=timestamp,
@@ -138,7 +138,7 @@ def process_diff(info: ProjectInfo, current_data: bytes, target_data: bytes, pre
 
     # Check for completion
     if max(remaining) == 0:
-        info.last_log_message = f"{info.name}: Complete! {num_target} pixels total. {info.rectangle.to_link()}"
+        info.last_log_message = f"{info.owner.name}/{info.name}: Complete! {num_target} pixels total. {info.rectangle.to_link()}"
         return HistoryChange(
             project=info,
             timestamp=timestamp,
@@ -159,7 +159,7 @@ def process_diff(info: ProjectInfo, current_data: bytes, target_data: bytes, pre
     when = (datetime.now() + time_to_go).strftime("%b %d %H:%M")
 
     status_parts = [
-        f"{info.name}:",
+        f"{info.owner.name}/{info.name}:",
         f"{num_remaining}px remaining ({percent_complete:.2f}% complete)",
     ]
 

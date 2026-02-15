@@ -1,11 +1,18 @@
 import os
 
+import pytest
 from PIL import Image
 
 from pixel_hawk import projects
 from pixel_hawk.geometry import Point, Rectangle, Size, Tile
-from pixel_hawk.models import HistoryChange, ProjectInfo
+from pixel_hawk.models import HistoryChange, Person, ProjectInfo, ProjectState
 from pixel_hawk.palette import PALETTE, AsyncImage
+
+
+@pytest.fixture
+async def test_person():
+    """Create a test person for use in tests."""
+    return await Person.create(name="TestPerson")
 
 
 def _paletted_image(size=(4, 4), value=1):
@@ -31,40 +38,29 @@ class FakeAsyncImage:
         return self._image
 
 
-async def _make_project(path, rect):
+async def _make_project(path, rect, owner_id):
     """Helper to create a Project with a DB-backed ProjectInfo."""
-    info = await ProjectInfo.get_or_create_from_rect(rect, path.with_suffix("").name)
+    info = await ProjectInfo.get_or_create_from_rect(rect, owner_id, path.with_suffix("").name)
+    # Fetch owner relationship for metadata log messages
+    await info.fetch_related("owner")
     return projects.Project(path, rect, info)
 
 
-# Project.try_open tests
+# Database-first loading tests
 
 
-async def test_try_open_no_coords(tmp_path, setup_config):
-    """Test that try_open returns None and moves file to rejected/ when filename has no coordinates."""
-    p = setup_config.projects_dir / "no_coords.png"
-    p.write_bytes(b"x")
-    result = await projects.Project.try_open(p)
-    assert result is None
-    assert not p.exists()
-    assert (setup_config.rejected_dir / "no_coords.png").exists()
+async def test_from_info_valid_project(tmp_path, setup_config, test_person, monkeypatch):
+    """Test Project.from_info successfully loads a valid project."""
+    # Create project directory for test person
+    person_dir = setup_config.projects_dir / str(test_person.id)
+    person_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create a valid project file
+    rect = Rectangle.from_point_size(Point(1000, 1000), Size(10, 10))
+    info = await ProjectInfo.from_rect(rect, test_person.id, "test_project")
 
-async def test_try_open_invalid_color(tmp_path, setup_config):
-    """Test that try_open moves files with invalid palette colors to rejected/."""
-    path = setup_config.projects_dir / "proj_0_0_0_0.png"
-    im = Image.new("RGBA", (2, 2), (250, 251, 252, 255))
-    im.save(path)
-
-    res = await projects.Project.try_open(path)
-    assert res is None
-    assert not path.exists()
-    assert (setup_config.rejected_dir / "proj_0_0_0_0.png").exists()
-
-
-async def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
-    """Test that try_open successfully opens a valid project file."""
-    path = tmp_path / "proj_1_1_0_0.png"
+    # Create the actual image file
+    path = person_dir / info.filename
     im = PALETTE.new((10, 10))
     im.putdata([1] * 100)
     im.save(path)
@@ -74,20 +70,69 @@ async def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
 
     monkeypatch.setattr(projects.Project, "run_diff", noop_run_diff)
 
-    res = await projects.Project.try_open(path)
-    assert isinstance(res, projects.Project)
-    assert isinstance(res.rect, Rectangle)
+    # Fetch owner relationship before loading project
+    await info.fetch_related("owner")
+
+    # Load project from info
+    proj = await projects.Project.from_info(info)
+    assert proj is not None
+    assert isinstance(proj, projects.Project)
+    assert proj.rect == rect
+
+
+async def test_from_info_missing_file(tmp_path, setup_config, test_person):
+    """Test Project.from_info returns None when file is missing."""
+    rect = Rectangle.from_point_size(Point(0, 0), Size(10, 10))
+    info = await ProjectInfo.from_rect(rect, test_person.id, "missing_project")
+
+    # Fetch owner relationship
+    await info.fetch_related("owner")
+
+    # Don't create the file - it should be missing
+    proj = await projects.Project.from_info(info)
+    assert proj is None
+
+
+async def test_from_info_invalid_palette(tmp_path, setup_config, test_person):
+    """Test Project.from_info returns None when file has invalid palette."""
+    # Create project directory for test person
+    person_dir = setup_config.projects_dir / str(test_person.id)
+    person_dir.mkdir(parents=True, exist_ok=True)
+
+    rect = Rectangle.from_point_size(Point(0, 0), Size(10, 10))
+    info = await ProjectInfo.from_rect(rect, test_person.id, "invalid_palette")
+
+    # Fetch owner relationship
+    await info.fetch_related("owner")
+
+    # Create file with wrong colors
+    path = person_dir / info.filename
+    im = Image.new("RGBA", (10, 10), (250, 251, 252, 255))
+    im.save(path)
+
+    proj = await projects.Project.from_info(info)
+    assert proj is None
+
+
+async def test_projectinfo_filename_property(test_person):
+    """Test ProjectInfo.filename property returns coordinate-only format."""
+    rect = Rectangle.from_point_size(Point.from4(5, 7, 250, 380), Size(120, 80))
+    info = await ProjectInfo.from_rect(rect, test_person.id, "my_project")
+
+    # Filename should be coordinates only, no name prefix
+    assert info.filename == "5_7_250_380.png"
+    assert "my_project" not in info.filename
 
 
 # Project.run_diff tests
 
 
-async def test_run_diff_branches(monkeypatch, tmp_path):
+async def test_run_diff_branches(monkeypatch, tmp_path, test_person):
     """Test run_diff with various scenarios (no change, changes)."""
     p = tmp_path / "proj_0_0_1_1.png"
     p.touch()
     rect = Rectangle.from_point_size(Point.from4(0, 0, 0, 0), Size(1, 1))
-    proj = await _make_project(p, rect)
+    proj = await _make_project(p, rect, test_person.id)
 
     class CM:
         def __init__(self, data):
@@ -129,13 +174,13 @@ async def test_run_diff_branches(monkeypatch, tmp_path):
     await proj.run_diff()
 
 
-async def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
+async def test_run_diff_complete_and_remaining(monkeypatch, tmp_path, test_person):
     """Test run_diff complete and progress calculation paths."""
     proj_path = tmp_path / "proj_0_0_0_0.png"
     proj_path.touch()
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    p = await _make_project(proj_path, rect)
+    p = await _make_project(proj_path, rect, test_person.id)
 
     target = _paletted_image((4, 4), value=1)
 
@@ -158,62 +203,17 @@ async def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
     await p.run_diff()
 
 
-async def test_try_open_non_file(tmp_path, setup_config):
-    """Test that try_open returns None for directories and non-files."""
-    d = tmp_path / "not_a_file_0_0_0_0.png"
-    d.mkdir()
-    result = await projects.Project.try_open(d)
-    assert result is None
-
-
-async def test_project_first_seen(tmp_path, setup_config, monkeypatch):
-    """Test that Project.info.first_seen is set on creation."""
-    path = setup_config.projects_dir / "proj_0_0_0_0.png"
-    img = PALETTE.new((4, 4))
-    img.save(path)
-
-    async def noop_run_diff(self, changed_tile=None):
-        pass
-
-    monkeypatch.setattr(projects.Project, "run_diff", noop_run_diff)
-
-    proj = await projects.Project.try_open(path)
-    assert isinstance(proj, projects.Project)
-    assert proj.info.first_seen > 0
-
-
-# Project.scan_directory tests
-
-
-async def test_scan_directory(tmp_path, setup_config):
-    """Test Project.scan_directory returns PNG files."""
-    projects_dir = setup_config.projects_dir
-
-    png1 = projects_dir / "file1.png"
-    png2 = projects_dir / "file2.png"
-    txt = projects_dir / "file.txt"
-    png1.touch()
-    png2.touch()
-    txt.touch()
-
-    result = await projects.Project.scan_directory()
-    assert png1 in result
-    assert png2 in result
-    assert txt not in result
-    assert len(result) == 2
-
-
 # Project.has_been_modified tests
 
 
-async def test_project_has_been_modified(tmp_path):
+async def test_project_has_been_modified(tmp_path, test_person):
     """Test Project.has_been_modified detects file changes."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     assert not proj.has_been_modified()
 
@@ -223,33 +223,33 @@ async def test_project_has_been_modified(tmp_path):
     assert proj.has_been_modified()
 
 
-async def test_project_has_been_modified_with_oserror(tmp_path):
+async def test_project_has_been_modified_with_oserror(tmp_path, test_person):
     """Test Project.has_been_modified handles OSError."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     path.unlink()
     assert proj.has_been_modified()
 
 
-async def test_project_has_been_modified_with_none_mtime(tmp_path):
+async def test_project_has_been_modified_with_none_mtime(tmp_path, test_person):
     """Test Project.has_been_modified when mtime is 0."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
     proj.mtime = 0
 
     assert proj.has_been_modified()
 
 
-async def test_project_equality_and_hash(tmp_path):
+async def test_project_equality_and_hash(tmp_path, test_person):
     """Test Project __eq__ and __hash__ methods."""
     path1 = tmp_path / "proj_0_0_0_0.png"
     path2 = tmp_path / "proj_1_1_1_1.png"
@@ -259,9 +259,9 @@ async def test_project_equality_and_hash(tmp_path):
     im.save(path2)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj1 = await _make_project(path1, rect)
-    proj2 = await _make_project(path1, rect)
-    proj3 = await _make_project(path2, rect)
+    proj1 = await _make_project(path1, rect, test_person.id)
+    proj2 = await _make_project(path1, rect, test_person.id)
+    proj3 = await _make_project(path2, rect, test_person.id)
 
     assert proj1 == proj2
     assert hash(proj1) == hash(proj2)
@@ -270,45 +270,45 @@ async def test_project_equality_and_hash(tmp_path):
     assert proj1 != "not a project"
 
 
-async def test_project_deletion(tmp_path):
+async def test_project_deletion(tmp_path, test_person):
     """Test Project deletion does not raise."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
     del proj
 
 
 # ProjectInfo DB persistence tests
 
 
-async def test_project_info_save_and_load(tmp_path):
+async def test_project_info_save_and_load(tmp_path, test_person):
     """Test ProjectInfo persistence via DB."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     proj.info.max_completion_pixels = 42
     proj.info.total_progress = 100
     await proj.info.save()
 
     # Load fresh from DB
-    loaded = await ProjectInfo.get(name=proj.info.name)
+    loaded = await ProjectInfo.get(owner=test_person, name=proj.info.name)
     assert loaded.max_completion_pixels == 42
     assert loaded.total_progress == 100
 
 
-async def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
+async def test_project_snapshot_save_and_load(tmp_path, monkeypatch, test_person):
     """Test snapshot persistence."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((4, 4), value=1)
     im.save(path)
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     snapshot = _paletted_image((4, 4), value=2)
     await proj.save_snapshot(snapshot)
@@ -321,24 +321,24 @@ async def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
         assert all(v == 2 for v in data)
 
 
-async def test_project_snapshot_load_nonexistent(tmp_path):
+async def test_project_snapshot_load_nonexistent(tmp_path, test_person):
     """Test loading snapshot when it doesn't exist."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
     im.save(path)
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     async with proj.load_snapshot_if_exists() as snapshot:
         assert snapshot is None
 
 
-async def test_run_diff_with_info_tracking(tmp_path, monkeypatch):
+async def test_run_diff_with_info_tracking(tmp_path, monkeypatch, test_person):
     """Test that run_diff updates info correctly."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -363,12 +363,12 @@ async def test_run_diff_with_info_tracking(tmp_path, monkeypatch):
     assert proj.snapshot_path.exists()
 
 
-async def test_run_diff_creates_history_change(tmp_path, monkeypatch):
+async def test_run_diff_creates_history_change(tmp_path, monkeypatch, test_person):
     """Test that run_diff creates a HistoryChange record."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     target = _paletted_image((4, 4), value=1)
     current = _paletted_image((4, 4), value=1)
@@ -388,12 +388,12 @@ async def test_run_diff_creates_history_change(tmp_path, monkeypatch):
     assert changes[0].num_target > 0
 
 
-async def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
+async def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch, test_person):
     """Test progress/regress detection between checks."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -433,12 +433,12 @@ async def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
     assert proj.info.total_progress == initial_progress + 1
 
 
-async def test_run_diff_regress_detection(tmp_path, monkeypatch):
+async def test_run_diff_regress_detection(tmp_path, monkeypatch, test_person):
     """Test regress (griefing) detection."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -469,12 +469,12 @@ async def test_run_diff_regress_detection(tmp_path, monkeypatch):
     assert proj.info.largest_regress_pixels == 1
 
 
-async def test_run_diff_complete_status(tmp_path, monkeypatch):
+async def test_run_diff_complete_status(tmp_path, monkeypatch, test_person):
     """Test complete project detection."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     target = _paletted_image((2, 2), value=1)
     current = _paletted_image((2, 2), value=1)
@@ -491,12 +491,12 @@ async def test_run_diff_complete_status(tmp_path, monkeypatch):
     assert "Complete" in proj.info.last_log_message
 
 
-async def test_update_single_tile_metadata_updates_when_newer(tmp_path, monkeypatch, setup_config):
+async def test_update_single_tile_metadata_updates_when_newer(tmp_path, monkeypatch, setup_config, test_person):
     """Test _update_single_tile_metadata updates when tile file is newer."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     tile = Tile(0, 0)
     tile_path = setup_config.tiles_dir / f"tile-{tile}.png"
@@ -513,12 +513,12 @@ async def test_update_single_tile_metadata_updates_when_newer(tmp_path, monkeypa
     assert ["0_0", tile_mtime] in proj.info.tile_updates_24h
 
 
-async def test_update_single_tile_metadata_skips_when_not_newer(tmp_path, monkeypatch, setup_config):
+async def test_update_single_tile_metadata_skips_when_not_newer(tmp_path, monkeypatch, setup_config, test_person):
     """Test _update_single_tile_metadata skips update when tile not newer."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     tile = Tile(0, 0)
     tile_path = setup_config.tiles_dir / f"tile-{tile}.png"
@@ -537,12 +537,12 @@ async def test_update_single_tile_metadata_skips_when_not_newer(tmp_path, monkey
     assert ["0_0", 15000] in proj.info.tile_updates_24h
 
 
-async def test_update_single_tile_metadata_handles_missing_file(tmp_path, monkeypatch, setup_config):
+async def test_update_single_tile_metadata_handles_missing_file(tmp_path, monkeypatch, setup_config, test_person):
     """Test _update_single_tile_metadata handles nonexistent tile file."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     tile = Tile(0, 0)
 
@@ -555,12 +555,12 @@ async def test_update_single_tile_metadata_handles_missing_file(tmp_path, monkey
     assert len(proj.info.tile_updates_24h) == 0
 
 
-async def test_has_missing_tiles_all_present(tmp_path, monkeypatch, setup_config):
+async def test_has_missing_tiles_all_present(tmp_path, monkeypatch, setup_config, test_person):
     """Test _has_missing_tiles returns False when all tiles exist."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     for tile in rect.tiles:
         tile_file = setup_config.tiles_dir / f"tile-{tile}.png"
@@ -569,12 +569,12 @@ async def test_has_missing_tiles_all_present(tmp_path, monkeypatch, setup_config
     assert proj._has_missing_tiles() is False
 
 
-async def test_has_missing_tiles_some_missing(tmp_path, monkeypatch, setup_config):
+async def test_has_missing_tiles_some_missing(tmp_path, monkeypatch, setup_config, test_person):
     """Test _has_missing_tiles returns True when some tiles are missing."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 2000))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     tile_file = setup_config.tiles_dir / "tile-0_0.png"
     tile_file.touch()
@@ -582,17 +582,17 @@ async def test_has_missing_tiles_some_missing(tmp_path, monkeypatch, setup_confi
     assert proj._has_missing_tiles() is True
 
 
-async def test_has_missing_tiles_all_missing(tmp_path, monkeypatch, setup_config):
+async def test_has_missing_tiles_all_missing(tmp_path, monkeypatch, setup_config, test_person):
     """Test _has_missing_tiles returns True when all tiles are missing."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     assert proj._has_missing_tiles() is True
 
 
-async def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config):
+async def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config, test_person):
     """Test run_diff properly sets has_missing_tiles flag."""
     path = tmp_path / "proj_0_0_0_0.png"
 
@@ -601,7 +601,7 @@ async def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_conf
     im.save(path)
 
     rect = Rectangle.from_point_size(Point(0, 0), Size(10, 10))
-    proj = await _make_project(path, rect)
+    proj = await _make_project(path, rect, test_person.id)
 
     async def fake_stitch(rect):
         return _paletted_image((10, 10), 0)
@@ -621,7 +621,7 @@ async def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_conf
 # YAML migration tests
 
 
-async def test_yaml_migration(tmp_path, setup_config):
+async def test_yaml_migration(tmp_path, setup_config, test_person):
     """Test migration of legacy YAML metadata to SQLite."""
     from ruamel.yaml import YAML as YAMLWriter
 
@@ -650,7 +650,7 @@ async def test_yaml_migration(tmp_path, setup_config):
 
     # Trigger migration
     rect = Rectangle.from_point_size(Point(100, 200), Size(50, 60))
-    info = await projects._load_or_migrate_info(rect, "test_proj")
+    info = await projects._load_or_migrate_info(rect, test_person.id, "test_proj")
 
     # Verify migration worked
     assert info.name == "test_proj"
@@ -668,6 +668,6 @@ async def test_yaml_migration(tmp_path, setup_config):
     assert yaml_path.with_suffix(".yaml.migrated").exists()
 
     # Re-running should use DB, not YAML
-    info2 = await projects._load_or_migrate_info(rect, "test_proj")
+    info2 = await projects._load_or_migrate_info(rect, test_person.id, "test_proj")
     assert info2.name == "test_proj"
     assert info2.total_progress == 100

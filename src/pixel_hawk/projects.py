@@ -1,23 +1,21 @@
-"""Project discovery, parsing, validation, and diff computation.
+"""Project loading, validation, and diff computation.
 
-Scans get_config().projects_dir for PNG files with coordinate information
-encoded in the filename (format: *_x_y_w_h.png). Valid project images must use
-the WPlace palette and are cached in memory with their metadata.
+Loads projects from ProjectInfo database records. Project PNG files must have
+coordinate-only filenames (format: <tx>_<ty>_<px>_<py>.png) and use the WPlace palette.
 
 The Project class orchestrates diff computation by:
 - Loading target project images and stitching current canvas tiles
 - Comparing current state against previous snapshots to detect progress/regress
 - Delegating pixel counting and statistical calculations to ProjectInfo
-- Persisting project info to SQLite via Tortoise ORM Active Record
+- Persisting project info to SQLite via Tortoise ORM
 - Saving PNG snapshots to the snapshots directory
 - Logging detailed progress reports with completion estimates
 
-Invalid files are moved to get_config().rejected_dir to avoid repeated parsing.
+Projects are loaded from database, not discovered from filesystem.
 Pixel-level comparison and metadata update logic lives in metadata.py.
 """
 
 import asyncio
-import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,15 +25,13 @@ from ruamel.yaml import YAML
 
 from . import metadata
 from .config import get_config
-from .geometry import Point, Rectangle, Size, Tile
+from .geometry import Rectangle, Size, Tile
 from .ingest import stitch_tiles
-from .models import DiffStatus, ProjectInfo
+from .models import DiffStatus, ProjectInfo, ProjectState
 from .palette import PALETTE, AsyncImage, ColorsNotInPalette
 
 if TYPE_CHECKING:
     from PIL import Image
-
-_RE_HAS_COORDS = re.compile(r"[- _](\d+)[- _](\d+)[- _](\d+)[- _](\d+)\.png$", flags=re.IGNORECASE)
 
 
 class Project:
@@ -61,54 +57,32 @@ class Project:
             return self.mtime != 0
 
     @classmethod
-    async def iter(cls) -> list[Project]:
-        """Returns all valid projects found in the projects directory."""
-        path = get_config().projects_dir
-        logger.info(f"Searching for projects in {path}")
-        items = await asyncio.to_thread(lambda: sorted(path.iterdir()))
-        results = []
-        for f in items:
-            p = await cls.try_open(f)
-            if p is not None:
-                results.append(p)
-        return results
-
-    @classmethod
-    async def scan_directory(cls) -> set[Path]:
-        """Returns the set of PNG files in the projects directory."""
-        path = get_config().projects_dir
-        return await asyncio.to_thread(lambda: {p for p in path.glob("*.png") if p.is_file()})
-
-    @classmethod
-    def _reject(cls, path: Path, reason: str) -> None:
-        """Move a file to the rejected directory."""
-        dest = get_config().rejected_dir / path.name
-        logger.warning(f"{path.name}: Rejected ({reason}), moving to {dest}")
-        path.rename(dest)
-
-    @classmethod
-    async def try_open(cls, path: Path) -> Project | None:
-        """Attempts to open a project from the given path. Returns None if invalid."""
-
-        match = _RE_HAS_COORDS.search(path.name)
-        if not match or not path.is_file():
-            if path.is_file():
-                cls._reject(path, "no coordinates in filename")
-            return None
+    async def from_info(cls, info: ProjectInfo) -> Project | None:
+        """Load a project from ProjectInfo record. Returns None if file missing or invalid."""
+        # Construct path from owner ID and filename
+        # Note: owner should be prefetched before calling this method
+        path = get_config().projects_dir / str(info.owner.id) / info.filename
 
         try:
-            # Convert now, but close immediately. We'll reopen later as needed.
             async with PALETTE.aopen_file(path) as image:
                 size = Size(*image.size)
-        except ColorsNotInPalette as e:
-            cls._reject(path, str(e))
+        except FileNotFoundError:
+            # File missing - log warning but don't fail
+            await info.fetch_related("owner")
+            logger.warning(f"{info.owner.name}/{info.name}: File not found at {path}")
             return None
-        rect = Rectangle.from_point_size(Point.from4(*map(int, match.groups())), size)
-        name = path.with_suffix("").name
+        except ColorsNotInPalette as e:
+            await info.fetch_related("owner")
+            logger.error(f"{info.owner.name}/{info.name}: Invalid palette: {e}")
+            return None
 
-        logger.info(f"{path.name}: Detected project at {rect}")
+        rect = info.rectangle
+        # Verify size matches database record
+        if rect.size != size:
+            await info.fetch_related("owner")
+            logger.error(f"{info.owner.name}/{info.name}: Size mismatch - DB says {rect.size}, file is {size}")
+            return None
 
-        info = await _load_or_migrate_info(rect, name)
         new = cls(path, rect, info)
         await new.run_diff()
         return new
@@ -225,26 +199,27 @@ class Project:
         return False
 
 
-async def _load_or_migrate_info(rect: Rectangle, name: str) -> ProjectInfo:
+async def _load_or_migrate_info(rect: Rectangle, owner_id: int, name: str) -> ProjectInfo:
     """Load ProjectInfo from DB, migrate from YAML if needed, or create new."""
-    existing = await ProjectInfo.filter(name=name).first()
+    existing = await ProjectInfo.filter(owner_id=owner_id, name=name).first()
     if existing:
         return existing
 
-    # Check for legacy YAML metadata file
-    yaml_path = get_config().metadata_dir / f"{name}.metadata.yaml"
-    if yaml_path.exists():
-        try:
-            info = await _migrate_from_yaml(yaml_path, name)
-            logger.info(f"{name}: Migrated metadata from YAML to SQLite")
-            return info
-        except Exception as e:
-            logger.warning(f"{name}: Failed to migrate YAML metadata: {e}. Creating new.")
+    # Check for legacy YAML metadata file (only for owner_id=1, Kiva)
+    if owner_id == 1:
+        yaml_path = get_config().metadata_dir / f"{name}.metadata.yaml"
+        if yaml_path.exists():
+            try:
+                info = await _migrate_from_yaml(yaml_path, owner_id, name)
+                logger.info(f"{name}: Migrated metadata from YAML to SQLite")
+                return info
+            except Exception as e:
+                logger.warning(f"{name}: Failed to migrate YAML metadata: {e}. Creating new.")
 
-    return await ProjectInfo.from_rect(rect, name)
+    return await ProjectInfo.from_rect(rect, owner_id, name)
 
 
-async def _migrate_from_yaml(yaml_path: Path, name: str) -> ProjectInfo:
+async def _migrate_from_yaml(yaml_path: Path, owner_id: int, name: str) -> ProjectInfo:
     """Read legacy YAML metadata and create a ProjectInfo record in the database."""
     yaml_reader = YAML(typ="safe")
 
@@ -268,7 +243,9 @@ async def _migrate_from_yaml(yaml_path: Path, name: str) -> ProjectInfo:
     tile_updates_24h = [[item["tile"], item["timestamp"]] for item in raw_24h]
 
     info = await ProjectInfo.create(
+        owner_id=owner_id,
         name=name,
+        state=ProjectState.ACTIVE,  # Legacy projects default to active
         x=bounds.get("x", 0),
         y=bounds.get("y", 0),
         width=bounds.get("width", 0),

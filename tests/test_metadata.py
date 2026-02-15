@@ -2,14 +2,22 @@
 
 import time
 
+import pytest
+
 from pixel_hawk import metadata
 from pixel_hawk.geometry import Point, Rectangle, Size, Tile
-from pixel_hawk.models import ProjectInfo
+from pixel_hawk.models import Person, ProjectInfo, ProjectState
 
 
-async def test_project_info_default_initialization():
+@pytest.fixture
+async def test_person():
+    """Create a test person for use in tests."""
+    return await Person.create(name="TestPerson")
+
+
+async def test_project_info_default_initialization(test_person):
     """Test ProjectInfo can be created with defaults via DB."""
-    info = await ProjectInfo.create(name="test")
+    info = await ProjectInfo.create(owner=test_person, name="test")
 
     assert info.x == 0
     assert info.y == 0
@@ -31,15 +39,15 @@ async def test_project_info_default_initialization():
     assert info.tile_updates_24h == []
 
 
-async def test_from_rect():
+async def test_from_rect(test_person):
     """Test ProjectInfo.from_rect creates correct initial state."""
     rect = Rectangle.from_point_size(Point(100, 200), Size(50, 60))
 
     before_time = round(time.time())
-    info = await ProjectInfo.from_rect(rect, "test_project.png")
+    info = await ProjectInfo.from_rect(rect, test_person.id, "test_project")
     after_time = round(time.time())
 
-    assert info.name == "test_project.png"
+    assert info.name == "test_project"
     assert info.x == 100
     assert info.y == 200
     assert info.width == 50
@@ -52,42 +60,43 @@ async def test_from_rect():
     assert info.total_regress == 0
 
 
-async def test_from_rect_with_offset():
+async def test_from_rect_with_offset(test_person):
     """Test ProjectInfo.from_rect with non-zero origin."""
     rect = Rectangle.from_point_size(Point.from4(5, 7, 250, 380), Size(120, 80))
-    info = await ProjectInfo.from_rect(rect, "offset_project.png")
+    info = await ProjectInfo.from_rect(rect, test_person.id, "offset_project")
 
-    assert info.name == "offset_project.png"
+    assert info.name == "offset_project"
     assert info.x == 5250  # 5 * 1000 + 250
     assert info.y == 7380  # 7 * 1000 + 380
     assert info.width == 120
     assert info.height == 80
 
 
-async def test_get_or_create_from_rect_creates_new():
+async def test_get_or_create_from_rect_creates_new(test_person):
     """Test get_or_create_from_rect creates when not in DB."""
     rect = Rectangle.from_point_size(Point(10, 20), Size(30, 40))
-    info = await ProjectInfo.get_or_create_from_rect(rect, "new_project")
+    info = await ProjectInfo.get_or_create_from_rect(rect, test_person.id, "new_project")
 
     assert info.name == "new_project"
     assert info.x == 10
     assert info.width == 30
 
 
-async def test_get_or_create_from_rect_returns_existing():
+async def test_get_or_create_from_rect_returns_existing(test_person):
     """Test get_or_create_from_rect returns existing record."""
     rect = Rectangle.from_point_size(Point(10, 20), Size(30, 40))
-    info1 = await ProjectInfo.from_rect(rect, "existing_project")
+    info1 = await ProjectInfo.from_rect(rect, test_person.id, "existing_project")
     info1.total_progress = 42
     await info1.save()
 
-    info2 = await ProjectInfo.get_or_create_from_rect(rect, "existing_project")
+    info2 = await ProjectInfo.get_or_create_from_rect(rect, test_person.id, "existing_project")
     assert info2.total_progress == 42
 
 
-async def test_db_persistence_round_trip():
+async def test_db_persistence_round_trip(test_person):
     """Test ProjectInfo saves to and loads from DB correctly."""
     await ProjectInfo.create(
+        owner=test_person,
         name="roundtrip",
         x=10,
         y=20,
@@ -103,7 +112,7 @@ async def test_db_persistence_round_trip():
         tile_updates_24h=[["1_2", 7000]],
     )
 
-    loaded = await ProjectInfo.get(name="roundtrip")
+    loaded = await ProjectInfo.get(owner=test_person, name="roundtrip")
     assert loaded.x == 10
     assert loaded.y == 20
     assert loaded.width == 30
@@ -117,9 +126,9 @@ async def test_db_persistence_round_trip():
     assert loaded.tile_updates_24h == [["1_2", 7000]]
 
 
-async def test_prune_old_tile_updates():
+async def test_prune_old_tile_updates(test_person):
     """Test pruning of old tile updates from 24h list."""
-    info = await ProjectInfo.create(name="prune_test")
+    info = await ProjectInfo.create(owner=test_person, name="prune_test")
     now = round(time.time())
     old_time = now - 100000  # more than 24h ago
     recent_time = now - 1000  # within 24h
@@ -141,9 +150,9 @@ async def test_prune_old_tile_updates():
     assert ["old_tile_2", old_time - 5000] not in info.tile_updates_24h
 
 
-async def test_prune_empty_list():
+async def test_prune_empty_list(test_person):
     """Test pruning on empty tile updates list."""
-    info = await ProjectInfo.create(name="prune_empty")
+    info = await ProjectInfo.create(owner=test_person, name="prune_empty")
     info.tile_updates_24h = []
 
     info.last_check = round(time.time())
@@ -152,9 +161,9 @@ async def test_prune_empty_list():
     assert info.tile_updates_24h == []
 
 
-async def test_prune_all_old():
+async def test_prune_all_old(test_person):
     """Test pruning when all updates are old."""
-    info = await ProjectInfo.create(name="prune_all_old")
+    info = await ProjectInfo.create(owner=test_person, name="prune_all_old")
     old_time = round(time.time()) - 200000
     info.tile_updates_24h = [
         ["tile_1", old_time],
@@ -167,9 +176,9 @@ async def test_prune_all_old():
     assert info.tile_updates_24h == []
 
 
-async def test_update_tile():
+async def test_update_tile(test_person):
     """Test tile update recording."""
-    info = await ProjectInfo.create(name="update_tile")
+    info = await ProjectInfo.create(owner=test_person, name="update_tile")
     tile = Tile(1, 2)
     timestamp = 12345
 
@@ -179,9 +188,9 @@ async def test_update_tile():
     assert ["1_2", timestamp] in info.tile_updates_24h
 
 
-async def test_update_tile_multiple_times():
+async def test_update_tile_multiple_times(test_person):
     """Test updating the same tile multiple times."""
-    info = await ProjectInfo.create(name="update_multi")
+    info = await ProjectInfo.create(owner=test_person, name="update_multi")
     tile = Tile(5, 10)
 
     metadata.update_tile(info, tile, 1000)
@@ -195,9 +204,9 @@ async def test_update_tile_multiple_times():
     assert ["5_10", 2000] in info.tile_updates_24h
 
 
-async def test_update_tile_duplicate_prevention():
+async def test_update_tile_duplicate_prevention(test_person):
     """Test that duplicate tile updates are not added."""
-    info = await ProjectInfo.create(name="update_dup")
+    info = await ProjectInfo.create(owner=test_person, name="update_dup")
     tile = Tile(3, 7)
     timestamp = 5000
 
@@ -210,9 +219,9 @@ async def test_update_tile_duplicate_prevention():
     assert info.tile_updates_24h[0] == ["3_7", timestamp]
 
 
-async def test_update_multiple_tiles():
+async def test_update_multiple_tiles(test_person):
     """Test updating multiple different tiles."""
-    info = await ProjectInfo.create(name="update_many")
+    info = await ProjectInfo.create(owner=test_person, name="update_many")
 
     tiles_and_times = [
         (Tile(1, 2), 1000),
@@ -234,9 +243,9 @@ async def test_update_multiple_tiles():
     assert ["5_6", 3000] in info.tile_updates_24h
 
 
-async def test_tile_tracking_integrated():
+async def test_tile_tracking_integrated(test_person):
     """Test integrated tile tracking with updates and pruning."""
-    info = await ProjectInfo.create(name="integrated")
+    info = await ProjectInfo.create(owner=test_person, name="integrated")
     now = round(time.time())
 
     old_time = now - 100000
@@ -262,15 +271,16 @@ async def test_tile_tracking_integrated():
     assert "2_2" in info.tile_last_update
 
 
-async def test_numeric_fields_precision():
+async def test_numeric_fields_precision(test_person):
     """Test floating point precision in DB round-trip."""
     info = await ProjectInfo.create(
+        owner=test_person,
         name="precision",
         max_completion_percent=99.99999,
         recent_rate_pixels_per_hour=123.456789,
     )
 
-    loaded = await ProjectInfo.get(name="precision")
+    loaded = await ProjectInfo.get(owner=test_person, name="precision")
     assert loaded.max_completion_percent == info.max_completion_percent
     assert loaded.recent_rate_pixels_per_hour == info.recent_rate_pixels_per_hour
 
@@ -338,9 +348,9 @@ async def test_compare_snapshots_skips_transparent():
     assert regress == 0
 
 
-async def test_update_completion_new_record():
+async def test_update_completion_new_record(test_person):
     """Test updating max completion when improved."""
-    info = await ProjectInfo.create(name="comp_new")
+    info = await ProjectInfo.create(owner=test_person, name="comp_new")
 
     metadata.update_completion(info, 100, 50.0, 1000)
     assert info.max_completion_pixels == 100
@@ -353,9 +363,9 @@ async def test_update_completion_new_record():
     assert info.max_completion_time == 2000
 
 
-async def test_update_completion_no_improvement():
+async def test_update_completion_no_improvement(test_person):
     """Test that completion doesn't downgrade."""
-    info = await ProjectInfo.create(name="comp_noimpr")
+    info = await ProjectInfo.create(owner=test_person, name="comp_noimpr")
 
     metadata.update_completion(info, 50, 75.0, 1000)
 
@@ -365,9 +375,9 @@ async def test_update_completion_no_improvement():
     assert info.max_completion_time == 1000
 
 
-async def test_update_regress_new_record():
+async def test_update_regress_new_record(test_person):
     """Test updating largest regress event."""
-    info = await ProjectInfo.create(name="reg_new")
+    info = await ProjectInfo.create(owner=test_person, name="reg_new")
 
     metadata.update_regress(info, 10, 1000)
     assert info.largest_regress_pixels == 10
@@ -378,9 +388,9 @@ async def test_update_regress_new_record():
     assert info.largest_regress_time == 2000
 
 
-async def test_update_regress_not_larger():
+async def test_update_regress_not_larger(test_person):
     """Test that smaller regress doesn't update record."""
-    info = await ProjectInfo.create(name="reg_smaller")
+    info = await ProjectInfo.create(owner=test_person, name="reg_smaller")
 
     metadata.update_regress(info, 20, 1000)
     metadata.update_regress(info, 5, 2000)
@@ -389,9 +399,9 @@ async def test_update_regress_not_larger():
     assert info.largest_regress_time == 1000
 
 
-async def test_update_rate_new_window():
+async def test_update_rate_new_window(test_person):
     """Test rate calculation starting new window."""
-    info = await ProjectInfo.create(name="rate_new")
+    info = await ProjectInfo.create(owner=test_person, name="rate_new")
 
     metadata.update_rate(info, 10, 2, 1000)
 
@@ -399,9 +409,9 @@ async def test_update_rate_new_window():
     assert info.recent_rate_pixels_per_hour == 0.0
 
 
-async def test_update_rate_with_elapsed_time():
+async def test_update_rate_with_elapsed_time(test_person):
     """Test rate calculation with elapsed time."""
-    info = await ProjectInfo.create(name="rate_elapsed")
+    info = await ProjectInfo.create(owner=test_person, name="rate_elapsed")
 
     info.recent_rate_window_start = 1000
     metadata.update_rate(info, 10, 2, 1000 + 3600)
@@ -409,9 +419,9 @@ async def test_update_rate_with_elapsed_time():
     assert info.recent_rate_pixels_per_hour == 8.0
 
 
-async def test_update_rate_window_reset():
+async def test_update_rate_window_reset(test_person):
     """Test rate window resets after 24 hours."""
-    info = await ProjectInfo.create(name="rate_reset")
+    info = await ProjectInfo.create(owner=test_person, name="rate_reset")
 
     info.recent_rate_window_start = 1000
     info.recent_rate_pixels_per_hour = 100.0
@@ -422,9 +432,9 @@ async def test_update_rate_window_reset():
     assert info.recent_rate_pixels_per_hour == 0.0
 
 
-async def test_update_rate_negative_net_change():
+async def test_update_rate_negative_net_change(test_person):
     """Test rate calculation with net regress."""
-    info = await ProjectInfo.create(name="rate_neg")
+    info = await ProjectInfo.create(owner=test_person, name="rate_neg")
 
     info.recent_rate_window_start = 1000
     metadata.update_rate(info, 2, 10, 1000 + 3600)
@@ -432,18 +442,18 @@ async def test_update_rate_negative_net_change():
     assert info.recent_rate_pixels_per_hour == -8.0
 
 
-async def test_has_missing_tiles_default():
+async def test_has_missing_tiles_default(test_person):
     """Test has_missing_tiles defaults to True."""
-    info = await ProjectInfo.create(name="miss_default")
+    info = await ProjectInfo.create(owner=test_person, name="miss_default")
     assert info.has_missing_tiles is True
 
 
-async def test_has_missing_tiles_persistence():
+async def test_has_missing_tiles_persistence(test_person):
     """Test has_missing_tiles persists through DB round-trip."""
-    await ProjectInfo.create(name="miss_persist", has_missing_tiles=False)
-    loaded = await ProjectInfo.get(name="miss_persist")
+    await ProjectInfo.create(owner=test_person, name="miss_persist", has_missing_tiles=False)
+    loaded = await ProjectInfo.get(owner=test_person, name="miss_persist")
     assert loaded.has_missing_tiles is False
 
-    await ProjectInfo.create(name="miss_persist2", has_missing_tiles=True)
-    loaded2 = await ProjectInfo.get(name="miss_persist2")
+    await ProjectInfo.create(owner=test_person, name="miss_persist2", has_missing_tiles=True)
+    loaded2 = await ProjectInfo.get(owner=test_person, name="miss_persist2")
     assert loaded2.has_missing_tiles is True
