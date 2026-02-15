@@ -12,12 +12,15 @@ round-robin between queues, choosing the least-recently-checked tile within each
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
 
 from .config import get_config
 from .geometry import Tile
+
+if TYPE_CHECKING:
+    from .projects import Project
 
 
 @dataclass
@@ -147,7 +150,7 @@ class TileQueue:
     def is_empty(self) -> bool:
         return len(self.tiles) == 0
 
-    def select_next(self, tile_to_projects: dict) -> Optional[TileMetadata]:
+    def select_next(self, tile_to_projects: dict[Tile, set[Project]]) -> Optional[TileMetadata]:
         """Select tile with oldest last_checked time (0 = oldest).
 
         For burning queue (where all last_checked = 0), uses project first_seen
@@ -168,7 +171,7 @@ class TileQueue:
         def tile_priority(tile_meta: TileMetadata) -> int:
             """Returns min_first_seen for sorting."""
             projects = tile_to_projects.get(tile_meta.tile, set())
-            min_first_seen = min((p.get_first_seen() for p in projects), default=1 << 58)
+            min_first_seen = min((p.metadata.first_seen for p in projects), default=1 << 58)
             return min_first_seen
 
         oldest = min(self.tiles, key=tile_priority)

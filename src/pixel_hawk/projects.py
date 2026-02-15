@@ -11,7 +11,7 @@ The Project class orchestrates diff computation by:
 - Persisting YAML metadata and PNG snapshots adjacent to project files
 - Logging detailed progress reports with completion estimates
 
-Invalid files are represented as ProjectShim instances to avoid repeated parsing.
+Invalid files are moved to get_config().rejected_dir to avoid repeated parsing.
 Pixel-level comparison and metadata update logic lives in metadata.py.
 """
 
@@ -40,71 +40,65 @@ yaml.default_flow_style = False
 yaml.width = 120
 
 
-class ProjectShim:
-    """Represents a file that may or may not be a valid project."""
+class Project:
+    """Represents a wplace project stored on disk that has been validated."""
 
-    def __init__(self, path: Path, rect: Rectangle = Rectangle(0, 0, 0, 0)):
+    def __init__(self, path: Path, rect: Rectangle):
+        """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
         self.path = path
         self.rect = rect
-        self.mtime: int = 0
+        self.mtime = 0
         try:
             self.mtime = round(path.stat().st_mtime)
         except OSError:
-            pass  # If the file doesn't exist or can't be accessed, we treat it as having no mtime
+            pass
+        self.metadata = self.load_metadata()
 
     def has_been_modified(self) -> bool:
-        """Check if the file has been modified since it was marked invalid."""
+        """Check if the file has been modified since it was loaded."""
         try:
             current_mtime = round(self.path.stat().st_mtime)
             return current_mtime != self.mtime
         except OSError:
             return self.mtime != 0
 
-    def run_diff(self, changed_tile: "Tile | None" = None) -> None:
-        """No-op for invalid project files."""
-        pass
-
-    def run_nochange(self) -> None:
-        """No-op for invalid project files."""
-        pass
-
-    def get_first_seen(self) -> int:
-        """Return sentinel value for invalid projects (far future, so they don't win selection)."""
-        return 1 << 58
-
-
-class Project(ProjectShim):
-    """Represents a wplace project stored on disk that has been validated."""
-
     @classmethod
-    def iter(cls) -> Iterable[ProjectShim]:
-        """Yields all projects (valid and invalid) found in the user pictures directory."""
+    def iter(cls) -> Iterable[Project]:
+        """Yields all valid projects found in the projects directory."""
         path = get_config().projects_dir
         logger.info(f"Searching for projects in {path}")
-        return (cls.try_open(p) for p in sorted(path.iterdir()))
+        return (p for f in sorted(path.iterdir()) if (p := cls.try_open(f)) is not None)
 
     @classmethod
     def scan_directory(cls) -> set[Path]:
-        """Returns the set of PNG files in the user pictures/wplace directory."""
+        """Returns the set of PNG files in the projects directory."""
         path = get_config().projects_dir
         return {p for p in path.glob("*.png") if p.is_file()}
 
     @classmethod
-    def try_open(cls, path: Path) -> ProjectShim:
-        """Attempts to open a project from the given path. Returns ProjectShim if invalid."""
+    def _reject(cls, path: Path, reason: str) -> None:
+        """Move a file to the rejected directory."""
+        dest = get_config().rejected_dir / path.name
+        logger.warning(f"{path.name}: Rejected ({reason}), moving to {dest}")
+        path.rename(dest)
+
+    @classmethod
+    def try_open(cls, path: Path) -> Project | None:
+        """Attempts to open a project from the given path. Returns None if invalid."""
 
         match = _RE_HAS_COORDS.search(path.name)
         if not match or not path.is_file():
-            return ProjectShim(path)  # no coords or otherwise invalid/irrelevant
+            if path.is_file():
+                cls._reject(path, "no coordinates in filename")
+            return None
 
         try:
             # Convert now, but close immediately. We'll reopen later as needed.
             with PALETTE.open_file(path) as image:
                 size = Size(*image.size)
         except ColorsNotInPalette as e:
-            logger.warning(f"{path.name}: Color not in palette: {e}")
-            path.rename(path.with_suffix(".invalid.png"))
-            return ProjectShim(path)
+            cls._reject(path, str(e))
+            return None
         rect = Rectangle.from_point_size(Point.from4(*map(int, match.groups())), size)
 
         logger.info(f"{path.name}: Detected project at {rect}")
@@ -112,15 +106,6 @@ class Project(ProjectShim):
         new = cls(path, rect)
         new.run_diff()
         return new
-
-    def __init__(self, path: Path, rect: Rectangle):
-        """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
-        super().__init__(path, rect)
-        self.metadata = self.load_metadata()
-
-    def get_first_seen(self) -> int:
-        """Return the timestamp when this project was first detected."""
-        return self.metadata.first_seen
 
     def __eq__(self, other) -> bool:
         return self.path == getattr(other, "path", ...)

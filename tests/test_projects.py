@@ -1,5 +1,4 @@
 import time
-from types import SimpleNamespace
 
 from PIL import Image
 
@@ -22,26 +21,26 @@ def _paletted_image(size=(4, 4), value=1):
 # Project.try_open tests
 
 
-def test_try_open_no_coords(tmp_path):
-    """Test that try_open returns ProjectShim when filename has no coordinates."""
-    p = tmp_path / "no_coords.png"
+def test_try_open_no_coords(tmp_path, setup_config):
+    """Test that try_open returns None and moves file to rejected/ when filename has no coordinates."""
+    p = setup_config.projects_dir / "no_coords.png"
     p.write_bytes(b"x")
     result = projects.Project.try_open(p)
-    assert type(result) is projects.ProjectShim
-    assert result.path == p
+    assert result is None
+    assert not p.exists()
+    assert (setup_config.rejected_dir / "no_coords.png").exists()
 
 
-def test_try_open_invalid_color(tmp_path, monkeypatch):
-    """Test that try_open renames files with invalid palette colors."""
-    # write an image with a color not in the palette
-    path = tmp_path / "proj_0_0_0_0.png"
+def test_try_open_invalid_color(tmp_path, setup_config):
+    """Test that try_open moves files with invalid palette colors to rejected/."""
+    path = setup_config.projects_dir / "proj_0_0_0_0.png"
     im = Image.new("RGBA", (2, 2), (250, 251, 252, 255))
     im.save(path)
 
-    # try_open should detect color not in palette and rename the file
     res = projects.Project.try_open(path)
-    assert type(res) is projects.ProjectShim
-    assert path.with_suffix(".invalid.png").exists()
+    assert res is None
+    assert not path.exists()
+    assert (setup_config.rejected_dir / "proj_0_0_0_0.png").exists()
 
 
 def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
@@ -132,117 +131,16 @@ def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
     p.run_diff()  # should compute remaining and log progress without error
 
 
-# ProjectShim tests
+def test_try_open_non_file(tmp_path, setup_config):
+    """Test that try_open returns None for directories and non-files."""
+    d = tmp_path / "not_a_file_0_0_0_0.png"
+    d.mkdir()
+    result = projects.Project.try_open(d)
+    assert result is None
 
 
-def test_invalid_project_file_interface(tmp_path):
-    """Test that ProjectShim has the expected interface."""
-    path = tmp_path / "invalid.png"
-    path.touch()
-
-    invalid = projects.ProjectShim(path)
-    assert invalid.path == path
-    assert invalid.mtime != 0
-    assert hasattr(invalid, "rect")
-    assert len(list(invalid.rect.tiles)) == 0  # empty rect
-    assert callable(invalid.has_been_modified)
-    assert callable(invalid.run_diff)
-
-    # run_diff should be a no-op
-    invalid.run_diff()  # should not raise
-
-
-def test_invalid_project_file_has_been_modified(tmp_path):
-    """Test that ProjectShim.has_been_modified detects changes."""
-    path = tmp_path / "test.png"
-    path.touch()
-
-    invalid = projects.ProjectShim(path)
-    assert not invalid.has_been_modified()  # just created
-
-    # Manually set mtime to a different value to simulate passage of time
-    # When has_been_modified() checks against the real file's mtime, it will detect the difference
-    real_mtime = round(path.stat().st_mtime)
-    invalid.mtime = real_mtime - 1  # Set to 1 second earlier
-
-    assert invalid.has_been_modified()  # should detect change
-
-
-def test_invalid_project_file_handles_oserror_on_init(tmp_path, monkeypatch):
-    """Test that ProjectShim handles OSError during initialization."""
-    path = tmp_path / "nonexistent.png"
-
-    # File doesn't exist, so stat will fail
-    invalid = projects.ProjectShim(path)
-    assert invalid.mtime == 0
-
-
-def test_invalid_project_file_has_been_modified_with_oserror(tmp_path, monkeypatch):
-    """Test that ProjectShim.has_been_modified handles OSError."""
-    path = tmp_path / "test.png"
-    path.touch()
-
-    invalid = projects.ProjectShim(path)
-
-    # Delete the file after creating the instance
-    path.unlink()
-
-    # has_been_modified should return True when stat fails
-    assert invalid.has_been_modified()
-
-
-def test_invalid_project_file_has_been_modified_with_none_mtime(tmp_path):
-    """Test ProjectShim.has_been_modified when mtime is None."""
-    path = tmp_path / "test.png"
-    path.touch()
-
-    invalid = projects.ProjectShim(path)
-    invalid.mtime = 0
-
-    # Should return True when mtime is None
-    assert invalid.has_been_modified()
-
-
-def test_invalid_project_file_nonexistent_stays_nonexistent(tmp_path):
-    """Test ProjectShim when file never exists."""
-    path = tmp_path / "never_exists.png"
-
-    # Create ProjectShim for non-existent file
-    invalid = projects.ProjectShim(path)
-    assert invalid.mtime == 0
-
-    # File still doesn't exist - should return False (no modification)
-    assert not invalid.has_been_modified()
-
-
-def test_invalid_project_file_created_after_init(tmp_path):
-    """Test ProjectShim when file is created after initialization."""
-    path = tmp_path / "created_later.png"
-
-    # Create ProjectShim for non-existent file
-    invalid = projects.ProjectShim(path)
-    assert invalid.mtime == 0
-
-    # Create the file
-    path.touch()
-
-    # File now exists with mtime > 0, and stored mtime is 0
-    # has_been_modified() should detect this difference
-    assert invalid.has_been_modified()
-
-
-def test_projectshim_get_first_seen():
-    """Test that ProjectShim.get_first_seen returns sentinel value."""
-    from pathlib import Path
-
-    shim = projects.ProjectShim(Path("test.png"))
-
-    # Should return far future sentinel (1 << 58)
-    assert shim.get_first_seen() == (1 << 58)
-
-
-def test_project_get_first_seen(tmp_path, setup_config):
-    """Test that Project.get_first_seen returns metadata first_seen."""
+def test_project_first_seen(tmp_path, setup_config):
+    """Test that Project.metadata.first_seen is set on creation."""
     from pixel_hawk.palette import PALETTE
 
     # Create a valid project file in projects_dir
@@ -255,13 +153,11 @@ def test_project_get_first_seen(tmp_path, setup_config):
     # Open as project
     proj = projects.Project.try_open(path)
 
-    # Should be valid Project, not ProjectShim
+    # Should be a valid Project
     assert isinstance(proj, projects.Project)
 
-    # get_first_seen should return the metadata's first_seen
-    first_seen = proj.get_first_seen()
-    assert first_seen > 0
-    assert first_seen == proj.metadata.first_seen
+    # metadata.first_seen should be set
+    assert proj.metadata.first_seen > 0
 
 
 # Project.scan_directory tests

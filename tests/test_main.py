@@ -25,8 +25,10 @@ def test_main_load_and_check_tiles(monkeypatch):
         def run_diff(self, changed_tile=None):
             self._called["run_diff"] += 1
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
         def __hash__(self):
             return hash(self.path)
@@ -77,8 +79,10 @@ def test_main_indexing_and_check_tiles_and_load_forget(tmp_path, monkeypatch):
         def run_diff(self, changed_tile=None):
             called["run"] = True
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
     monkeypatch.setattr(projects.Project, "try_open", classmethod(lambda cls, p: DummyProj(p)))
 
@@ -120,8 +124,10 @@ def test_main_forget_removes_tile_key(monkeypatch):
             self.path = path
             self.rect = rect
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
         def __hash__(self):
             return hash(self.path)
@@ -139,7 +145,7 @@ def test_main_forget_removes_tile_key(monkeypatch):
 
 
 def test_maybe_load_project_invalid(monkeypatch):
-    """Test that maybe_load_project handles ProjectShim gracefully."""
+    """Test that maybe_load_project skips when try_open returns None."""
 
     # start with no projects
     class FakeProjectClass:
@@ -149,16 +155,15 @@ def test_maybe_load_project_invalid(monkeypatch):
 
         @classmethod
         def try_open(cls, p):
-            return projects.ProjectShim(p)
+            return None
 
     monkeypatch.setattr(main_mod, "Project", FakeProjectClass)
     m = main_mod.Main()
     path = Path("/tmp/nothing.png")
-    # should store the ProjectShim but not index tiles
+    # should not store anything for rejected files
     m.maybe_load_project(path)
-    assert path in m.projects
-    assert isinstance(m.projects[path], projects.ProjectShim)
-    assert len(m.tile_checker.tiles) == 0  # No tiles indexed for invalid projects
+    assert path not in m.projects
+    assert len(m.tile_checker.tiles) == 0
 
 
 # check_projects tests (file watching)
@@ -202,8 +207,10 @@ def test_check_projects_detects_added_and_deleted(tmp_path, monkeypatch, setup_c
         def run_diff(self):
             pass
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
     monkeypatch.setattr(projects.Project, "try_open", classmethod(lambda cls, p: DummyProj(p)))
 
@@ -243,8 +250,10 @@ def test_check_projects_processes_added_and_deleted(tmp_path, monkeypatch, setup
         def run_diff(self):
             called["run"] += 1
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
     def make_proj(cls, p):
         inst = DummyProj(p)
@@ -289,8 +298,10 @@ def test_check_projects_handles_modified_files(tmp_path, monkeypatch, setup_conf
             except OSError:
                 return True
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
         def run_diff(self):
             pass
@@ -336,8 +347,10 @@ def test_check_projects_skips_deleted_files_in_current_loop(tmp_path, monkeypatc
         def run_diff(self):
             pass
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
     existing_proj = DummyProj(proj_path)
 
@@ -542,8 +555,10 @@ def test_main_check_tiles_round_robin(monkeypatch):
         def has_been_modified(self):
             return False
 
-        def get_first_seen(self) -> int:
-            return 1000
+        class _Meta:
+            first_seen = 1000
+
+        metadata = _Meta()
 
         def __hash__(self):
             return hash(self.path)
