@@ -11,12 +11,13 @@ tile per polling cycle, selecting round-robin between queues and choosing the
 least-recently-checked tile within each queue.
 """
 
+import asyncio
 import os
 import time
 from email.utils import formatdate, parsedate_to_datetime
 from typing import TYPE_CHECKING, Iterable
 
-import requests
+import httpx
 from loguru import logger
 from PIL import Image, UnidentifiedImageError
 
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from .projects import Project
 
 
-def has_tile_changed(tile: Tile) -> tuple[bool, int]:
+async def has_tile_changed(tile: Tile, client: httpx.AsyncClient) -> tuple[bool, int]:
     """Downloads the indicated tile from the server and updates the cache.
 
     Returns:
@@ -50,7 +51,7 @@ def has_tile_changed(tile: Tile) -> tuple[bool, int]:
         headers["If-Modified-Since"] = formatdate(mtime, usegmt=True)
 
     try:
-        response = requests.get(url, headers=headers, timeout=5)
+        response = await client.get(url, headers=headers)
     except Exception as e:
         logger.debug(f"Tile {tile}: Request failed: {e}")
         return False, 0
@@ -75,9 +76,9 @@ def has_tile_changed(tile: Tile) -> tuple[bool, int]:
         last_modified_timestamp = int(time.time())
 
     try:
-        with PALETTE.open_bytes(data) as img:
+        async with PALETTE.aopen_bytes(data) as img:
             logger.info(f"Tile {tile}: Change detected, updating cache...")
-            img.save(cache_path)
+            await asyncio.to_thread(img.save, cache_path)
             os.utime(cache_path, (last_modified_timestamp, last_modified_timestamp))
     except (UnidentifiedImageError, ColorsNotInPalette) as e:
         logger.debug(f"Tile {tile}: image decode failed: {e}")
@@ -86,7 +87,7 @@ def has_tile_changed(tile: Tile) -> tuple[bool, int]:
     return True, last_modified_timestamp
 
 
-def stitch_tiles(rect: Rectangle) -> Image.Image:
+async def stitch_tiles(rect: Rectangle) -> Image.Image:
     """Stitches tiles from cache together, exactly covering the given rectangle."""
     image = PALETTE.new(rect.size)
     for tile in rect.tiles:
@@ -94,7 +95,7 @@ def stitch_tiles(rect: Rectangle) -> Image.Image:
         if not cache_path.exists():
             logger.debug(f"{tile}: Tile missing from cache, leaving transparent")
             continue
-        with PALETTE.open_file(cache_path) as tile_image:
+        async with PALETTE.aopen_file(cache_path) as tile_image:
             offset = tile.to_point() - rect.point
             image.paste(tile_image, Rectangle.from_point_size(offset, Size(1000, 1000)))
     return image
@@ -107,10 +108,13 @@ class TileChecker:
     recently-modified tiles while still monitoring quieter areas. Tiles are
     organized into a burning queue (never checked) and multiple temperature
     queues (hot to cold) based on last modification time.
+
+    Creates and owns an httpx.AsyncClient for tile fetching.
     """
 
     def __init__(self, projects: Iterable[Project]):
-        """Initialize with a mapping of project paths to projects."""
+        """Initialize with projects to monitor. Creates an httpx.AsyncClient for tile fetching."""
+        self.client = httpx.AsyncClient(timeout=5)
         self.tiles: dict[Tile, set[Project]] = {}
         self._build_index(projects)
 
@@ -149,7 +153,7 @@ class TileChecker:
         if removed_tiles:
             self.queue_system.remove_tiles(removed_tiles)
 
-    def check_next_tile(self) -> None:
+    async def check_next_tile(self) -> None:
         """Check one tile for changes using queue-based selection and update affected projects."""
         if not self.tiles:
             return  # No tiles to check
@@ -160,7 +164,7 @@ class TileChecker:
             return
 
         tile = tile_meta.tile
-        changed, last_modified = has_tile_changed(tile)
+        changed, last_modified = await has_tile_changed(tile, self.client)
 
         if last_modified == 0:
             # Server failure - don't update metadata or advance round-robin
@@ -172,6 +176,10 @@ class TileChecker:
 
         for proj in self.tiles.get(tile) or ():
             if changed:
-                proj.run_diff(changed_tile=tile)
+                await proj.run_diff(changed_tile=tile)
             else:
-                proj.run_nochange()
+                await proj.run_nochange()
+
+    async def close(self) -> None:
+        """Close the httpx client."""
+        await self.client.aclose()

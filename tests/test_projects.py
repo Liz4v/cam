@@ -5,7 +5,7 @@ from PIL import Image
 from pixel_hawk import projects
 from pixel_hawk.geometry import Point, Rectangle, Size
 from pixel_hawk.metadata import ProjectMetadata
-from pixel_hawk.palette import PALETTE
+from pixel_hawk.palette import PALETTE, AsyncImage
 
 
 def _paletted_image(size=(4, 4), value=1):
@@ -15,35 +15,51 @@ def _paletted_image(size=(4, 4), value=1):
     return im
 
 
+class FakeAsyncImage:
+    """Mock AsyncImage for tests that need to patch aopen_file."""
+
+    def __init__(self, image):
+        self._image = image
+
+    async def __aenter__(self):
+        return self._image
+
+    async def __aexit__(self, *_):
+        pass
+
+    async def __call__(self):
+        return self._image
+
+
 # Basic utility tests
 
 
 # Project.try_open tests
 
 
-def test_try_open_no_coords(tmp_path, setup_config):
+async def test_try_open_no_coords(tmp_path, setup_config):
     """Test that try_open returns None and moves file to rejected/ when filename has no coordinates."""
     p = setup_config.projects_dir / "no_coords.png"
     p.write_bytes(b"x")
-    result = projects.Project.try_open(p)
+    result = await projects.Project.try_open(p)
     assert result is None
     assert not p.exists()
     assert (setup_config.rejected_dir / "no_coords.png").exists()
 
 
-def test_try_open_invalid_color(tmp_path, setup_config):
+async def test_try_open_invalid_color(tmp_path, setup_config):
     """Test that try_open moves files with invalid palette colors to rejected/."""
     path = setup_config.projects_dir / "proj_0_0_0_0.png"
     im = Image.new("RGBA", (2, 2), (250, 251, 252, 255))
     im.save(path)
 
-    res = projects.Project.try_open(path)
+    res = await projects.Project.try_open(path)
     assert res is None
     assert not path.exists()
     assert (setup_config.rejected_dir / "proj_0_0_0_0.png").exists()
 
 
-def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
+async def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
     """Test that try_open successfully opens a valid project file."""
     # create a correct paletted image
     path = tmp_path / "proj_1_1_0_0.png"
@@ -51,12 +67,13 @@ def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
     im.putdata([1] * 100)
     im.save(path)
 
-    # monkeypatch stitch_tiles to return identical image -> run_diff should be quick
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect: PALETTE.new((10, 10)))
-    # avoid heavy logging or side effects
-    monkeypatch.setattr(projects.Project, "run_diff", lambda self: None)
+    # monkeypatch run_diff to avoid needing stitch_tiles
+    async def noop_run_diff(self, changed_tile=None):
+        pass
 
-    res = projects.Project.try_open(path)
+    monkeypatch.setattr(projects.Project, "run_diff", noop_run_diff)
+
+    res = await projects.Project.try_open(path)
     assert isinstance(res, projects.Project)
     assert isinstance(res.rect, Rectangle)
 
@@ -64,7 +81,7 @@ def test_try_open_valid_project_and_run_diff(tmp_path, monkeypatch):
 # Project.run_diff tests
 
 
-def test_run_diff_branches(monkeypatch, tmp_path):
+async def test_run_diff_branches(monkeypatch, tmp_path):
     """Test run_diff with various scenarios (no change, changes)."""
     # create a dummy project and exercise run_diff branches
     p = tmp_path / "proj_0_0_1_1.png"
@@ -88,6 +105,7 @@ def test_run_diff_branches(monkeypatch, tmp_path):
     class CM:
         def __init__(self, data):
             self.data = data
+            self.size = (1, 1)
 
         def __enter__(self):
             return self
@@ -98,17 +116,31 @@ def test_run_diff_branches(monkeypatch, tmp_path):
         def get_flattened_data(self):
             return self.data
 
-    monkeypatch.setattr(PALETTE, "open_file", lambda path: CM(target))
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect: CM(target))
-    proj.run_diff()  # should early-return without error
+        def save(self, path):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path: FakeAsyncImage(CM(target)))
+
+    async def fake_stitch(rect):
+        return CM(target)
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch)
+    await proj.run_diff()  # should early-return without error
 
     # Case 2: progress branch (different data)
-    monkeypatch.setattr(PALETTE, "open_file", lambda path: CM(bytes([0, 1, 2])))
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect: CM(bytes([2, 3, 4])))
-    proj.run_diff()  # should run through progress logging
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path: FakeAsyncImage(CM(bytes([0, 1, 2]))))
+
+    async def fake_stitch2(rect):
+        return CM(bytes([2, 3, 4]))
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch2)
+    await proj.run_diff()  # should run through progress logging
 
 
-def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
+async def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
     """Test run_diff complete and progress calculation paths."""
     # Create the file first so Project.__init__ doesn't fail
     proj_path = tmp_path / "proj_0_0_0_0.png"
@@ -121,28 +153,34 @@ def test_run_diff_complete_and_remaining(monkeypatch, tmp_path):
     target = _paletted_image((4, 4), value=1)
 
     # Case: current equals target -> complete branch
-    monkeypatch.setattr(PALETTE, "open_file", lambda path: target)
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((4, 4), value=1))
-    p.run_diff()  # should hit the 'Complete.' branch without error
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path: FakeAsyncImage(target))
+
+    async def fake_stitch_complete(rect):
+        return _paletted_image((4, 4), value=1)
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch_complete)
+    await p.run_diff()  # should hit the 'Complete.' branch without error
 
     # Case: current different -> remaining/progress calculation path
-    monkeypatch.setattr(PALETTE, "open_file", lambda path: target)
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((4, 4), value=0))
-    p.run_diff()  # should compute remaining and log progress without error
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path: FakeAsyncImage(target))
+
+    async def fake_stitch_partial(rect):
+        return _paletted_image((4, 4), value=0)
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch_partial)
+    await p.run_diff()  # should compute remaining and log progress without error
 
 
-def test_try_open_non_file(tmp_path, setup_config):
+async def test_try_open_non_file(tmp_path, setup_config):
     """Test that try_open returns None for directories and non-files."""
     d = tmp_path / "not_a_file_0_0_0_0.png"
     d.mkdir()
-    result = projects.Project.try_open(d)
+    result = await projects.Project.try_open(d)
     assert result is None
 
 
-def test_project_first_seen(tmp_path, setup_config):
+async def test_project_first_seen(tmp_path, setup_config, monkeypatch):
     """Test that Project.metadata.first_seen is set on creation."""
-    from pixel_hawk.palette import PALETTE
-
     # Create a valid project file in projects_dir
     path = setup_config.projects_dir / "proj_0_0_0_0.png"
 
@@ -150,8 +188,14 @@ def test_project_first_seen(tmp_path, setup_config):
     img = PALETTE.new((4, 4))
     img.save(path)
 
+    # Mock run_diff to avoid needing stitch_tiles
+    async def noop_run_diff(self, changed_tile=None):
+        pass
+
+    monkeypatch.setattr(projects.Project, "run_diff", noop_run_diff)
+
     # Open as project
-    proj = projects.Project.try_open(path)
+    proj = await projects.Project.try_open(path)
 
     # Should be a valid Project
     assert isinstance(proj, projects.Project)
@@ -163,7 +207,7 @@ def test_project_first_seen(tmp_path, setup_config):
 # Project.scan_directory tests
 
 
-def test_scan_directory(tmp_path, setup_config):
+async def test_scan_directory(tmp_path, setup_config):
     """Test Project.scan_directory returns PNG files."""
     # setup_config already creates projects_dir, just use it
     projects_dir = setup_config.projects_dir
@@ -176,7 +220,7 @@ def test_scan_directory(tmp_path, setup_config):
     png2.touch()
     txt.touch()
 
-    result = projects.Project.scan_directory()
+    result = await projects.Project.scan_directory()
     assert png1 in result
     assert png2 in result
     assert txt not in result
@@ -199,7 +243,6 @@ def test_project_has_been_modified(tmp_path):
     assert not proj.has_been_modified()
 
     # Manually set mtime to a different value to simulate passage of time
-    # When has_been_modified() checks against the real file's mtime, it will detect the difference
     real_mtime = round(path.stat().st_mtime)
     proj.mtime = real_mtime - 1  # Set to 1 second earlier
 
@@ -400,7 +443,7 @@ def test_project_metadata_save_and_load(tmp_path):
     assert proj2.metadata.total_progress == 100
 
 
-def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
+async def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
     """Test snapshot persistence."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((4, 4), value=1)
@@ -410,19 +453,18 @@ def test_project_snapshot_save_and_load(tmp_path, monkeypatch):
 
     # Create and save a snapshot
     snapshot = _paletted_image((4, 4), value=2)
-    proj.save_snapshot(snapshot)
+    await proj.save_snapshot(snapshot)
     assert proj.snapshot_path.exists()
     assert proj.metadata.last_snapshot > 0
 
     # Load snapshot and verify
-    loaded = proj.load_snapshot_if_exists()
-    assert loaded is not None
-    with loaded:
+    async with proj.load_snapshot_if_exists() as loaded:
+        assert loaded is not None
         data = loaded.get_flattened_data()
         assert all(v == 2 for v in data)
 
 
-def test_project_snapshot_load_nonexistent(tmp_path):
+async def test_project_snapshot_load_nonexistent(tmp_path):
     """Test loading snapshot when it doesn't exist."""
     path = tmp_path / "proj_0_0_0_0.png"
     im = _paletted_image((2, 2), value=1)
@@ -430,11 +472,11 @@ def test_project_snapshot_load_nonexistent(tmp_path):
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
     proj = projects.Project(path, rect)
 
-    with proj.load_snapshot_if_exists() as snapshot:
+    async with proj.load_snapshot_if_exists() as snapshot:
         assert snapshot is None
 
 
-def test_run_diff_with_metadata_tracking(tmp_path, monkeypatch):
+async def test_run_diff_with_metadata_tracking(tmp_path, monkeypatch):
     """Test that run_diff updates metadata correctly."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
@@ -451,10 +493,14 @@ def test_run_diff_with_metadata_tracking(tmp_path, monkeypatch):
     current = _paletted_image((4, 4), value=0)
     current.putpixel((0, 0), 1)  # correct
 
-    monkeypatch.setattr(PALETTE, "open_file", lambda path_arg: target)
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current)
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path_arg: FakeAsyncImage(target))
 
-    proj.run_diff()
+    async def fake_stitch(rect_arg):
+        return current
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch)
+
+    await proj.run_diff()
 
     # Check metadata was updated
     assert proj.metadata.last_check > 0
@@ -463,7 +509,7 @@ def test_run_diff_with_metadata_tracking(tmp_path, monkeypatch):
     assert proj.snapshot_path.exists()
 
 
-def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
+async def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
     """Test progress/regress detection between checks."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
@@ -479,18 +525,22 @@ def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
     current1 = _paletted_image((4, 4), value=0)
     current1.putpixel((0, 0), 1)
 
-    # Monkeypatch to return target for project path, let snapshots work normally
+    # aopen_file mock: use real PALETTE.open_file for snapshots, fake for project
     original_open_file = PALETTE.open_file
 
-    def open_file_mock(path_arg):
+    def aopen_file_mock(path_arg):
         if ".snapshot." in str(path_arg):
-            return original_open_file(path_arg)  # Use real implementation for snapshots
-        return target
+            return AsyncImage(original_open_file, path_arg)
+        return FakeAsyncImage(target)
 
-    monkeypatch.setattr(PALETTE, "open_file", open_file_mock)
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current1)
+    monkeypatch.setattr(PALETTE, "aopen_file", aopen_file_mock)
 
-    proj.run_diff()
+    async def fake_stitch1(rect_arg):
+        return current1
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch1)
+
+    await proj.run_diff()
     initial_progress = proj.metadata.total_progress
 
     # Second check: (0,0) still correct, (1,1) now correct too (progress)
@@ -498,15 +548,18 @@ def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch):
     current2.putpixel((0, 0), 1)
     current2.putpixel((1, 1), 2)
 
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current2)
+    async def fake_stitch2(rect_arg):
+        return current2
 
-    proj.run_diff()
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch2)
+
+    await proj.run_diff()
 
     # Should have detected 1 pixel of progress
     assert proj.metadata.total_progress == initial_progress + 1
 
 
-def test_run_diff_regress_detection(tmp_path, monkeypatch):
+async def test_run_diff_regress_detection(tmp_path, monkeypatch):
     """Test regress (griefing) detection."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
@@ -521,25 +574,32 @@ def test_run_diff_regress_detection(tmp_path, monkeypatch):
     current1 = _paletted_image((4, 4), value=0)
     current1.putpixel((0, 0), 1)
 
-    monkeypatch.setattr(PALETTE, "open_file", lambda path_arg: target)
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current1)
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path_arg: FakeAsyncImage(target))
 
-    proj.run_diff()
+    async def fake_stitch1(rect_arg):
+        return current1
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch1)
+
+    await proj.run_diff()
 
     # Second check: (0,0) now wrong (regress)
     current2 = _paletted_image((4, 4), value=0)
     current2.putpixel((0, 0), 7)  # wrong color
 
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current2)
+    async def fake_stitch2(rect_arg):
+        return current2
 
-    proj.run_diff()
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch2)
+
+    await proj.run_diff()
 
     # Should have detected regress
     assert proj.metadata.total_regress == 1
     assert proj.metadata.largest_regress_pixels == 1
 
 
-def test_run_diff_complete_status(tmp_path, monkeypatch):
+async def test_run_diff_complete_status(tmp_path, monkeypatch):
     """Test complete project detection."""
     path = tmp_path / "proj_0_0_0_0.png"
     path.touch()
@@ -550,10 +610,14 @@ def test_run_diff_complete_status(tmp_path, monkeypatch):
     target = _paletted_image((2, 2), value=1)
     current = _paletted_image((2, 2), value=1)
 
-    monkeypatch.setattr(PALETTE, "open_file", lambda path_arg: target)
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect_arg: current)
+    monkeypatch.setattr(PALETTE, "aopen_file", lambda path_arg: FakeAsyncImage(target))
 
-    proj.run_diff()
+    async def fake_stitch(rect_arg):
+        return current
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch)
+
+    await proj.run_diff()
 
     # Should detect as complete
     assert "Complete" in proj.metadata.last_log_message
@@ -691,7 +755,7 @@ def test_has_missing_tiles_all_missing(tmp_path, monkeypatch, setup_config):
     assert proj._has_missing_tiles() is True
 
 
-def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config):
+async def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config):
     """Test run_diff properly sets has_missing_tiles flag."""
     path = tmp_path / "proj_0_0_0_0.png"
 
@@ -704,10 +768,13 @@ def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config):
     proj = projects.Project(path, rect)
 
     # Mock stitch_tiles to return a blank image
-    monkeypatch.setattr(projects, "stitch_tiles", lambda rect: _paletted_image((10, 10), 0))
+    async def fake_stitch(rect):
+        return _paletted_image((10, 10), 0)
+
+    monkeypatch.setattr(projects, "stitch_tiles", fake_stitch)
 
     # Run diff with no tiles in cache
-    proj.run_diff()
+    await proj.run_diff()
 
     # Should have detected missing tiles
     assert proj.metadata.has_missing_tiles is True
@@ -717,7 +784,7 @@ def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config):
     tile_file.touch()
 
     # Run diff again
-    proj.run_diff()
+    await proj.run_diff()
 
     # Should now show no missing tiles
     assert proj.metadata.has_missing_tiles is False
