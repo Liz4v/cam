@@ -15,11 +15,11 @@ Invalid files are moved to get_config().rejected_dir to avoid repeated parsing.
 Pixel-level comparison and metadata update logic lives in metadata.py.
 """
 
+import asyncio
 import re
 import time
-from contextlib import nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, ContextManager, Iterable
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from ruamel.yaml import YAML
@@ -28,7 +28,7 @@ from .config import get_config
 from .geometry import Point, Rectangle, Size, Tile
 from .ingest import stitch_tiles
 from .metadata import DiffStatus, ProjectMetadata
-from .palette import PALETTE, ColorsNotInPalette
+from .palette import PALETTE, AsyncImage, ColorsNotInPalette
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -63,17 +63,23 @@ class Project:
             return self.mtime != 0
 
     @classmethod
-    def iter(cls) -> Iterable[Project]:
-        """Yields all valid projects found in the projects directory."""
+    async def iter(cls) -> list[Project]:
+        """Returns all valid projects found in the projects directory."""
         path = get_config().projects_dir
         logger.info(f"Searching for projects in {path}")
-        return (p for f in sorted(path.iterdir()) if (p := cls.try_open(f)) is not None)
+        items = await asyncio.to_thread(lambda: sorted(path.iterdir()))
+        results = []
+        for f in items:
+            p = await cls.try_open(f)
+            if p is not None:
+                results.append(p)
+        return results
 
     @classmethod
-    def scan_directory(cls) -> set[Path]:
+    async def scan_directory(cls) -> set[Path]:
         """Returns the set of PNG files in the projects directory."""
         path = get_config().projects_dir
-        return {p for p in path.glob("*.png") if p.is_file()}
+        return await asyncio.to_thread(lambda: {p for p in path.glob("*.png") if p.is_file()})
 
     @classmethod
     def _reject(cls, path: Path, reason: str) -> None:
@@ -83,7 +89,7 @@ class Project:
         path.rename(dest)
 
     @classmethod
-    def try_open(cls, path: Path) -> Project | None:
+    async def try_open(cls, path: Path) -> Project | None:
         """Attempts to open a project from the given path. Returns None if invalid."""
 
         match = _RE_HAS_COORDS.search(path.name)
@@ -94,7 +100,7 @@ class Project:
 
         try:
             # Convert now, but close immediately. We'll reopen later as needed.
-            with PALETTE.open_file(path) as image:
+            async with PALETTE.aopen_file(path) as image:
                 size = Size(*image.size)
         except ColorsNotInPalette as e:
             cls._reject(path, str(e))
@@ -104,7 +110,7 @@ class Project:
         logger.info(f"{path.name}: Detected project at {rect}")
 
         new = cls(path, rect)
-        new.run_diff()
+        await new.run_diff()
         return new
 
     def __eq__(self, other) -> bool:
@@ -146,25 +152,28 @@ class Project:
         except Exception as e:
             logger.error(f"Failed to save metadata for {self.path.name}: {e}")
 
-    def save_snapshot(self, image) -> None:
+    async def save_snapshot(self, image) -> None:
         """Save current canvas snapshot to disk."""
         try:
-            image.save(self.snapshot_path)
+            await asyncio.to_thread(image.save, self.snapshot_path)
             self.metadata.last_snapshot = round(time.time())
         except Exception as e:
             logger.error(f"Failed to save snapshot for {self.path.name}: {e}")
 
-    def load_snapshot_if_exists(self) -> ContextManager[Image.Image | None]:
-        """Return previous snapshot if it exists, or nullcontext if not."""
-        if not self.snapshot_path.exists():
-            return nullcontext()  # No snapshot yet, caller should handle as needed
-        try:
-            return PALETTE.open_file(self.snapshot_path)
-        except Exception as e:
-            logger.warning(f"Failed to load snapshot for {self.path.name}: {e}")
-            return nullcontext()
+    def load_snapshot_if_exists(self) -> AsyncImage:
+        """Return an AsyncImage that loads the previous snapshot, or yields None if absent."""
+        def _load() -> Image.Image | None:
+            if not self.snapshot_path.exists():
+                return None
+            try:
+                return PALETTE.open_file(self.snapshot_path)
+            except Exception as e:
+                logger.warning(f"Failed to load snapshot for {self.path.name}: {e}")
+                return None
 
-    def run_diff(self, changed_tile: Tile | None = None) -> None:
+        return AsyncImage(_load)
+
+    async def run_diff(self, changed_tile: Tile | None = None) -> None:
         """Compares current canvas against project target and previous snapshot.
 
         Args:
@@ -178,17 +187,17 @@ class Project:
             self.metadata.has_missing_tiles = self._has_missing_tiles()
 
         # Load target project image
-        with PALETTE.open_file(self.path) as target:
+        async with PALETTE.aopen_file(self.path) as target:
             target_data = get_flattened_data(target)
 
         # Load previous snapshot before overwriting
-        with self.load_snapshot_if_exists() as previous_snapshot:
+        async with self.load_snapshot_if_exists() as previous_snapshot:
             prev_data = get_flattened_data(previous_snapshot) if previous_snapshot else b""
 
         # Stitch current canvas state
-        with stitch_tiles(self.rect) as current:
+        with await stitch_tiles(self.rect) as current:
             current_data = get_flattened_data(current)
-            self.save_snapshot(current)
+            await self.save_snapshot(current)
 
         # Process diff: count, compare, update metadata, build log message
         result = self.metadata.process_diff(current_data, target_data, prev_data)
@@ -204,7 +213,7 @@ class Project:
         logger.info(self.metadata.last_log_message)
         self.save_metadata()
 
-    def run_nochange(self) -> None:
+    async def run_nochange(self) -> None:
         self.metadata.last_check = round(time.time())
         self.metadata.prune_old_tile_updates()  # regular cleanup task
         self.save_metadata()

@@ -7,12 +7,11 @@ the PALETTE singleton for converting images to paletted mode. The first color
 The Palette class validates images against the palette and provides exact color
 matching via binary search. Colors not in the palette raise ColorsNotInPalette.
 
-PaletteAsync wraps Palette's I/O methods to run in a thread, returning AsyncImage
-handles that can be used as async context managers or awaited directly via __call__.
+AsyncImage wraps blocking I/O calls to run in a thread on first access. Supports
+async context manager (auto-closes) and direct call (caller must close) patterns.
 
-Singletons:
-    PALETTE       — synchronous palette operations
-    PALETTE_ASYNC — async wrapper around PALETTE
+Singleton:
+    PALETTE — palette operations (sync methods + async wrappers via aopen_*)
 """
 
 import asyncio
@@ -53,11 +52,11 @@ class Palette:
         self._idx = tuple(sorted(rgb2pal.keys()))
         self._values = bytes(rgb2pal[c] for c in self._idx)
 
-    def aopen_file(self, path: str | Path) -> AsyncImage:
+    def aopen_file(self, path: str | Path) -> AsyncImage[Image.Image]:
         """Return an AsyncImage that will open and palette-convert the file at `path`."""
         return AsyncImage(self.open_file, path)
 
-    def aopen_bytes(self, payload: bytes) -> AsyncImage:
+    def aopen_bytes(self, payload: bytes) -> AsyncImage[Image.Image]:
         """Return an AsyncImage that will open and palette-convert `payload` bytes."""
         return AsyncImage(self.open_bytes, payload)
 
@@ -147,13 +146,15 @@ class ColorsNotInPalette(ValueError):
         super().__init__(f"Found {sum(report.values())} pixels not in the palette ({detail})")
 
 
-class AsyncImage:
-    """Deferred async handle for a palette image.
+_MISSING = object()
 
-    Wraps a blocking Palette call and runs it in a thread on first access.
+
+class AsyncImage[T]:
+    """Deferred async handle for a blocking I/O call, run in a thread on first access.
+
     Supports two usage patterns:
 
-    As an async context manager (auto-closes the image)::
+    As an async context manager (auto-closes the result if it has a close method)::
 
         async with handle as image:
             ...
@@ -161,28 +162,31 @@ class AsyncImage:
     As a direct awaitable (caller must close)::
 
         image = await handle()
+
+    The callable may return None (e.g. for optional snapshots), which is preserved
+    as a legitimate result distinct from "not yet loaded".
     """
 
-    def __init__(self, function: Callable[..., Image.Image], *args, **kwargs) -> None:
+    def __init__(self, function: Callable[..., T], *args, **kwargs) -> None:
         self.callable = partial(function, *args, **kwargs)
-        self.image: Image.Image | None = None
+        self._result = _MISSING
 
-    async def __call__(self) -> Image.Image:
-        """Run the blocking palette operation in a thread, returning the resulting image.
+    async def __call__(self) -> T:
+        """Run the blocking operation in a thread, returning the result.
 
-        The image is cached — repeated calls return the same instance.
+        The result is cached — repeated calls return the same instance.
         """
-        if self.image is None:
-            self.image = await asyncio.to_thread(self.callable)
-        return self.image
+        if self._result is _MISSING:
+            self._result = await asyncio.to_thread(self.callable)
+        return cast(T, self._result)
 
-    async def __aenter__(self) -> Image.Image:
-        """Enter the async context, loading the image if not already loaded."""
+    async def __aenter__(self):
+        """Enter the async context, loading the result if not already loaded."""
         return await self()
 
     async def __aexit__(self, *_) -> None:
-        """Exit the async context, closing the image."""
-        getattr(self.image, "close", lambda: None)()
+        """Exit the async context, closing the result if it has a close method."""
+        getattr(self._result, "close", lambda: None)()
 
 
 PALETTE = Palette([bytes.fromhex(c) for c in _COLORS.split()])

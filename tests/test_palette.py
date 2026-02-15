@@ -82,7 +82,6 @@ def test_lookup_wrong_teal_mapping():
 # --- Async tests (aopen_file / aopen_bytes on Palette) ---
 
 
-@pytest.mark.asyncio
 async def test_aopen_file(tmp_path):
     path = tmp_path / "pal.png"
     im = PALETTE.new((2, 2))
@@ -98,7 +97,6 @@ async def test_aopen_file(tmp_path):
     assert getattr(image, "fp", None) is None
 
 
-@pytest.mark.asyncio
 async def test_aopen_file_converts_non_paletted(tmp_path):
     from PIL import Image
 
@@ -113,7 +111,6 @@ async def test_aopen_file_converts_non_paletted(tmp_path):
         assert image.mode == "P"
 
 
-@pytest.mark.asyncio
 async def test_aopen_bytes():
     im = PALETTE.new((3, 3))
     im.putdata([0, 1, 2, 3, 4, 5, 6, 7, 8])
@@ -128,7 +125,6 @@ async def test_aopen_bytes():
     assert getattr(image, "fp", None) is None
 
 
-@pytest.mark.asyncio
 async def test_aopen_bytes_converts_non_paletted():
     from PIL import Image
 
@@ -142,7 +138,6 @@ async def test_aopen_bytes_converts_non_paletted():
         assert image.mode == "P"
 
 
-@pytest.mark.asyncio
 async def test_aopen_file_closes_on_exception(tmp_path):
     path = tmp_path / "pal.png"
     im = PALETTE.new((1, 1))
@@ -155,7 +150,6 @@ async def test_aopen_file_closes_on_exception(tmp_path):
     assert getattr(image, "fp", None) is None
 
 
-@pytest.mark.asyncio
 async def test_aopen_bytes_closes_on_exception():
     im = PALETTE.new((1, 1))
     buf = io.BytesIO()

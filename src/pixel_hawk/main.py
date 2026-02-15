@@ -7,7 +7,7 @@ tile for changes (via TileChecker) and scans the projects directory for new,
 modified, or deleted project files.
 """
 
-import time
+import asyncio
 from pathlib import Path
 
 from loguru import logger
@@ -23,51 +23,59 @@ POLLING_CYCLE_SECONDS = 30 * (1 + 5**0.5)
 
 class Main:
     def __init__(self):
-        """Initialize the main application, loading existing projects and indexing tiles."""
-        self.projects = {p.path: p for p in Project.iter()}
+        """Initialize the main application (sync setup only). Call start() to load projects."""
+        self.projects: dict[Path, Project] = {}
+        self.tile_checker: TileChecker | None = None
+
+    async def start(self) -> None:
+        """Load existing projects and initialize tile checker."""
+        self.projects = {p.path: p for p in await Project.iter()}
         logger.info(f"Loaded {len(self.projects)} projects.")
         self.tile_checker = TileChecker(self.projects.values())
 
-    def check_projects(self) -> None:
+    async def check_projects(self) -> None:
         """Check projects directory for added, modified, or deleted files."""
-        current_files = Project.scan_directory()
+        current_files = await Project.scan_directory()
         known_files = set(self.projects.keys())
         for path in known_files - current_files:
             self.forget_project(path)  # deleted file
         for path in current_files:
-            self.maybe_load_project(path)
+            await self.maybe_load_project(path)
 
-    def poll_once(self) -> None:
+    async def poll_once(self) -> None:
         """Run a cycle of the main polling loop."""
+        assert self.tile_checker is not None, "Must call start() before poll_once()"
         logger.debug("Checking for project file changes...")
-        self.check_projects()
+        await self.check_projects()
         logger.debug("Checking for tile updates...")
-        self.tile_checker.check_next_tile()
+        await self.tile_checker.check_next_tile()
 
     def forget_project(self, path: Path) -> None:
         """Clears cached data about the project at the given path."""
         proj = self.projects.pop(path, None)
         if not proj:
             return
+        assert self.tile_checker is not None
         self.tile_checker.remove_project(proj)
         logger.info(f"{path.name}: Forgot project")
 
-    def maybe_load_project(self, path: Path) -> None:
+    async def maybe_load_project(self, path: Path) -> None:
         """Checks a potential project file at the given path to see if it needs loading or reloading."""
         proj = self.projects.get(path)
         if proj and not proj.has_been_modified():
             return  # no change
         self.forget_project(path)
-        proj = Project.try_open(path)
+        proj = await Project.try_open(path)
         if proj is None:
             return  # invalid file, was moved to rejected/
         self.projects[path] = proj
+        assert self.tile_checker is not None
         self.tile_checker.add_project(proj)
         logger.info(f"{path.name}: Loaded project")
 
 
-def main():
-    """Main entry point for pixel-hawk."""
+async def _async_main():
+    """Async entry point for pixel-hawk."""
     # Set up logging
     cfg = get_config()
     log_file = cfg.logs_dir / "pixel-hawk.log"
@@ -80,11 +88,12 @@ def main():
     logger.info(f"Place project PNG files in: {cfg.projects_dir}")
     # set up main loop
     worker = Main()
+    await worker.start()
     consecutive_errors = 0
     logger.info(f"Starting polling loop ({POLLING_CYCLE_SECONDS:.1f}s cycle, 60φ = 30(1+√5))...")
     while True:
         try:
-            worker.poll_once()
+            await worker.poll_once()
             consecutive_errors = 0  # Reset on success
         except Exception as e:
             consecutive_errors += 1
@@ -94,10 +103,15 @@ def main():
                 raise
         logger.debug(f"Cycle complete, sleeping for {POLLING_CYCLE_SECONDS:.1f} seconds...")
         try:
-            time.sleep(POLLING_CYCLE_SECONDS)
-        except KeyboardInterrupt:
+            await asyncio.sleep(POLLING_CYCLE_SECONDS)
+        except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Exiting due to user interrupt.")
             return
+
+
+def main():
+    """Main entry point for pixel-hawk."""
+    asyncio.run(_async_main())
 
 
 if __name__ == "__main__":
