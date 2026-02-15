@@ -95,12 +95,17 @@ class Project:
 
     @property
     def snapshot_path(self) -> Path:
-        """Path to the snapshot file for this project."""
-        return get_config().snapshots_dir / self.path.name.replace(".png", ".snapshot.png")
+        """Path to the snapshot file for this project.
+
+        Uses same subfolder structure as projects: snapshots/{owner_id}/{filename}.
+        """
+        return get_config().snapshots_dir / str(self.info.owner.id) / self.info.filename
 
     async def save_snapshot(self, image) -> None:
         """Save current canvas snapshot to disk."""
         try:
+            # Ensure person subdirectory exists
+            self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(image.save, self.snapshot_path)
             self.info.last_snapshot = round(time.time())
         except Exception as e:

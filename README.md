@@ -149,7 +149,7 @@ All pixel-hawk data lives in a unified directory structure under `pixel-hawk-hom
   - Filenames are coordinates only: `{tx}_{ty}_{px}_{py}.png`
 - **`data/pixel-hawk.db`** — SQLite database (Person, ProjectInfo, HistoryChange tables)
 - **`tiles/`** — Cached tiles from WPlace backend
-- **`snapshots/`** — Canvas state snapshots for tracking changes
+- **`snapshots/{person_id}/`** — Canvas state snapshots organized by person (same structure as projects)
 - **`metadata/`** — Legacy YAML files (migrated to SQLite on first load)
 - **`logs/`** — Application logs (`pixel-hawk.log` with 10 MB rotation and 7-day retention)
 

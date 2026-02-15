@@ -40,7 +40,7 @@ uv run pixel-hawk
 - All data lives under pixel-hawk-home with organized subdirectories:
   - `projects/{person_id}/` — project PNG files organized by person ID (coordinate-only filenames: `{tx}_{ty}_{px}_{py}.png`)
   - `tiles/` — cached tiles from WPlace
-  - `snapshots/` — canvas state snapshots
+  - `snapshots/{person_id}/` — canvas state snapshots, same structure as projects (coordinate-only filenames)
   - `metadata/` — legacy YAML metadata files (migrated to SQLite on first load)
   - `logs/` — application logs
   - `data/` — SQLite database (`pixel-hawk.db`) with Person, ProjectInfo, and HistoryChange tables
