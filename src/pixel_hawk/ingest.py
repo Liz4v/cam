@@ -26,7 +26,7 @@ from .palette import PALETTE, ColorsNotInPalette
 from .queues import QueueSystem
 
 if TYPE_CHECKING:
-    from .projects import ProjectShim
+    from .projects import Project
 
 
 def has_tile_changed(tile: Tile) -> tuple[bool, int]:
@@ -109,22 +109,22 @@ class TileChecker:
     queues (hot to cold) based on last modification time.
     """
 
-    def __init__(self, projects: Iterable[ProjectShim]):
+    def __init__(self, projects: Iterable[Project]):
         """Initialize with a mapping of project paths to projects."""
-        self.tiles: dict[Tile, set[ProjectShim]] = {}
+        self.tiles: dict[Tile, set[Project]] = {}
         self._build_index(projects)
 
         # Initialize queue system with all indexed tiles
         self.queue_system = QueueSystem(set(self.tiles.keys()), self.tiles)
 
-    def _build_index(self, projects: Iterable[ProjectShim]) -> None:
+    def _build_index(self, projects: Iterable[Project]) -> None:
         """Index tiles to projects for quick lookup."""
         for proj in projects:
             for tile in proj.rect.tiles:
                 self.tiles.setdefault(tile, set()).add(proj)
         logger.info(f"Indexed {len(self.tiles)} tiles.")
 
-    def add_project(self, proj: ProjectShim) -> None:
+    def add_project(self, proj: Project) -> None:
         """Add a project and index its tiles."""
         new_tiles = set()
         for tile in proj.rect.tiles:
@@ -135,7 +135,7 @@ class TileChecker:
         if new_tiles:
             self.queue_system.add_tiles(new_tiles)
 
-    def remove_project(self, proj: ProjectShim) -> None:
+    def remove_project(self, proj: Project) -> None:
         """Remove a project and clean up its tiles from the index."""
         removed_tiles = set()
         for tile in proj.rect.tiles:

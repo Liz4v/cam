@@ -19,6 +19,7 @@ def setup_config(tmp_path, monkeypatch):
     config.snapshots_dir.mkdir(parents=True, exist_ok=True)
     config.metadata_dir.mkdir(parents=True, exist_ok=True)
     config.tiles_dir.mkdir(parents=True, exist_ok=True)
+    config.rejected_dir.mkdir(parents=True, exist_ok=True)
     config.logs_dir.mkdir(parents=True, exist_ok=True)
     config.data_dir.mkdir(parents=True, exist_ok=True)
 

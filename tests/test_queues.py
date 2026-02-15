@@ -1004,7 +1004,7 @@ def test_burning_queue_prioritizes_by_project_first_seen(tmp_path, monkeypatch):
         path=tmp_path / "proj1.png",
         rect=Rectangle(0, 0, 1000, 1000),  # Contains tile1
         metadata=SimpleNamespace(first_seen=1000),
-        get_first_seen=lambda: 1000,
+
     )
 
     # Project 2 (middle): first_seen = 2000
@@ -1012,7 +1012,7 @@ def test_burning_queue_prioritizes_by_project_first_seen(tmp_path, monkeypatch):
         path=tmp_path / "proj2.png",
         rect=Rectangle(1000, 0, 1000, 1000),  # Contains tile2
         metadata=SimpleNamespace(first_seen=2000),
-        get_first_seen=lambda: 2000,
+
     )
 
     # Project 3 (newest): first_seen = 3000
@@ -1020,7 +1020,7 @@ def test_burning_queue_prioritizes_by_project_first_seen(tmp_path, monkeypatch):
         path=tmp_path / "proj3.png",
         rect=Rectangle(2000, 0, 1000, 1000),  # Contains tile3
         metadata=SimpleNamespace(first_seen=3000),
-        get_first_seen=lambda: 3000,
+
     )
 
     # Create tile-to-projects mapping
@@ -1043,21 +1043,27 @@ def test_burning_queue_prioritizes_by_project_first_seen(tmp_path, monkeypatch):
     assert selected.tile == tile1  # Should select tile from oldest project
 
 
-def test_burning_queue_handles_projectshim(tmp_path, monkeypatch):
-    """Burning queue should handle ProjectShim instances (no metadata)."""
+def test_burning_queue_handles_project_with_early_first_seen(tmp_path, monkeypatch):
+    """Burning queue should handle projects with very early first_seen timestamps."""
     from pixel_hawk.geometry import Rectangle
-    from pixel_hawk.projects import ProjectShim
 
     tile1 = Tile(0, 0)
     tile2 = Tile(1, 0)
     tiles = {tile1, tile2}
 
-    # Create ProjectShim (invalid project with no metadata)
-    shim = ProjectShim(tmp_path / "invalid.png", Rectangle(0, 0, 1000, 1000))
+    class FakeMetadata:
+        first_seen = 1  # very early timestamp
+
+    class FakeProject:
+        def __init__(self):
+            self.rect = Rectangle(0, 0, 1000, 1000)
+            self.metadata = FakeMetadata()
+
+    proj = FakeProject()
 
     tile_to_projects = {
-        tile1: [shim],
-        tile2: [shim],
+        tile1: [proj],
+        tile2: [proj],
     }
 
     # Should not crash
@@ -1083,14 +1089,14 @@ def test_burning_queue_handles_shared_tiles(tmp_path, monkeypatch):
         path=tmp_path / "old.png",
         rect=Rectangle(0, 0, 2000, 1000),  # Contains both tiles
         metadata=SimpleNamespace(first_seen=1000),
-        get_first_seen=lambda: 1000,
+
     )
 
     new_proj = SimpleNamespace(
         path=tmp_path / "new.png",
         rect=Rectangle(1000, 0, 1000, 1000),  # Contains only tile2
         metadata=SimpleNamespace(first_seen=3000),
-        get_first_seen=lambda: 3000,
+
     )
 
     tile_to_projects = {
@@ -1129,7 +1135,7 @@ def test_temperature_queue_selection_unchanged(tmp_path, monkeypatch, setup_conf
         path=tmp_path / "proj.png",
         rect=Rectangle(0, 0, 10000, 1000),
         metadata=SimpleNamespace(first_seen=1000),
-        get_first_seen=lambda: 1000,
+
     )
 
     tile_to_projects = {tile: [proj] for tile in tiles}

@@ -50,8 +50,7 @@ class Main:
         if not proj:
             return
         self.tile_checker.remove_project(proj)
-        if proj.rect.tiles:  # Only log for valid projects
-            logger.info(f"{path.name}: Forgot project")
+        logger.info(f"{path.name}: Forgot project")
 
     def maybe_load_project(self, path: Path) -> None:
         """Checks a potential project file at the given path to see if it needs loading or reloading."""
@@ -60,10 +59,11 @@ class Main:
             return  # no change
         self.forget_project(path)
         proj = Project.try_open(path)
+        if proj is None:
+            return  # invalid file, was moved to rejected/
         self.projects[path] = proj
         self.tile_checker.add_project(proj)
-        if proj.rect:  # Only log for valid projects
-            logger.info(f"{path.name}: Loaded project")
+        logger.info(f"{path.name}: Loaded project")
 
 
 def main():

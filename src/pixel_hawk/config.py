@@ -49,6 +49,11 @@ class Config:
         return self.home / "logs"
 
     @property
+    def rejected_dir(self) -> Path:
+        """Directory for project files that failed to import."""
+        return self.home / "rejected"
+
+    @property
     def data_dir(self) -> Path:
         """Directory for future bot data and state."""
         return self.home / "data"
@@ -95,6 +100,7 @@ def load_config(args: list[str] | None = None) -> Config:
     cfg.snapshots_dir.mkdir(parents=True, exist_ok=True)
     cfg.metadata_dir.mkdir(parents=True, exist_ok=True)
     cfg.tiles_dir.mkdir(parents=True, exist_ok=True)
+    cfg.rejected_dir.mkdir(parents=True, exist_ok=True)
     cfg.logs_dir.mkdir(parents=True, exist_ok=True)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
 
