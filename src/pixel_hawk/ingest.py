@@ -17,6 +17,7 @@ from email.utils import formatdate, parsedate_to_datetime
 from typing import TYPE_CHECKING, Iterable
 
 import httpx
+from humanize import naturaldelta
 from loguru import logger
 from PIL import Image, UnidentifiedImageError
 
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from .projects import Project
 
 
-async def has_tile_changed(tile: Tile, client: httpx.AsyncClient, tile_info) -> tuple[bool, int, str]:
+async def has_tile_changed(tile: Tile, client: httpx.AsyncClient, tile_info: TileInfo) -> tuple[bool, int, str]:
     """Downloads the indicated tile from the server and updates the cache.
 
     Args:
@@ -151,31 +152,27 @@ class TileChecker:
             return  # No tiles to check
 
         # Select next tile from database via QueueSystem
-        tile = await self.queue_system.select_next_tile()
-        if not tile:
+        tile_info = await self.queue_system.select_next_tile()
+        if not tile_info:
             logger.warning("No next tile returned by the queue system. No active projects?")
             return
 
-        # Fetch TileInfo (required for conditional request headers)
-        tile_id = TileInfo.tile_id(tile.x, tile.y)
-        try:
-            tile_info = await TileInfo.get(id=tile_id)
-        except Exception as e:
-            logger.error(f"TileInfo not found for {tile}: {e}")
-            self.queue_system.retry_current_queue()
-            return
+        tile = Tile(x=tile_info.tile_x, y=tile_info.tile_y)
 
         # Check tile with ETag support
         changed, new_last_update, new_http_etag = await has_tile_changed(tile, self.client, tile_info)
 
         # Update tile in database
-        await self.queue_system.update_tile_after_check(tile, new_last_update, new_http_etag)
+        await self.queue_system.update_tile_after_check(tile_info, new_last_update, new_http_etag)
 
         # Diff against affected projects
-        for proj in self.tiles.get(tile) or ():
-            if changed:
+        if changed:
+            for proj in self.tiles.get(tile) or ():
                 await proj.run_diff(changed_tile=tile)
-            else:
+        else:
+            untouched = tile_info.last_update - tile_info.last_checked
+            logger.debug(f"Tile {tile}: Unchanged for {untouched}s ({naturaldelta(untouched)})")
+            for proj in self.tiles.get(tile) or ():
                 await proj.run_nochange()
 
     async def close(self) -> None:

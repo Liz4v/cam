@@ -18,7 +18,6 @@ import time
 
 from loguru import logger
 
-from .geometry import Tile
 from .models import TileInfo
 
 
@@ -119,14 +118,14 @@ class QueueSystem:
         """Load num_queues from existing database state. Call after DB is ready."""
         await self._rebuild_zipf_distribution()
 
-    async def select_next_tile(self) -> Tile | None:
+    async def select_next_tile(self) -> TileInfo | None:
         """Select next tile to check using round-robin across temperature queues.
 
         Queries database directly for least recently checked tile in current queue.
         Skips empty queues, trying all queues before giving up.
 
         Returns:
-            Tile object to check, or None if all queues are empty
+            TileInfo to check, or None if all queues are empty
         """
 
         # Determine current queue temperature (999 for burning, or 1 to num_queues)
@@ -145,23 +144,19 @@ class QueueSystem:
             self.current_queue_index += 1
 
             if tile_info:
-                # Convert TileInfo to Tile object
-                return Tile(x=tile_info.tile_x, y=tile_info.tile_y)
+                return tile_info
 
         return None
 
-    async def update_tile_after_check(self, tile: Tile, new_last_update: int, http_etag: str) -> None:
+    async def update_tile_after_check(self, tile_info: TileInfo, new_last_update: int, http_etag: str) -> None:
         """Update tile in database after checking.
 
         Args:
-            tile: The tile that was checked
+            tile_info: The TileInfo that was checked (as returned by select_next_tile)
             new_last_update: Parsed Last-Modified timestamp or current time
             http_etag: ETag header value from response
         """
         now = round(time.time())
-        tile_id = TileInfo.tile_id(tile.x, tile.y)
-        tile_info = await TileInfo.get(id=tile_id)
-
         was_burning = tile_info.last_checked == 0
 
         # Update timestamps and ETag

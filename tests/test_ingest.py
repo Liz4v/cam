@@ -265,32 +265,6 @@ async def test_check_next_tile_no_tile_selected():
     await checker.close()
 
 
-async def test_check_next_tile_tile_info_missing(setup_config):
-    """check_next_tile retries when TileInfo not found in DB."""
-    rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = MockProject(rect)
-
-    checker = TileChecker([proj])
-
-    # Create TileInfo so select works, then delete it before check fetches it
-    tile_info = await _create_tile_info(0, 0)
-    # Monkey-patch queue_system to select the tile, then delete the record
-    original_select = checker.queue_system.select_next_tile
-
-    async def select_and_delete():
-        tile = await original_select()
-        if tile:
-            await TileInfo.filter(id=TileInfo.tile_id(tile.x, tile.y)).delete()
-        return tile
-
-    checker.queue_system.select_next_tile = select_and_delete
-
-    await checker.check_next_tile()
-    proj.run_diff.assert_not_called()
-    proj.run_nochange.assert_not_called()
-    await checker.close()
-
-
 async def test_check_next_tile_changed_calls_run_diff(setup_config):
     """When tile has changed, run_diff is called on affected projects."""
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
