@@ -12,7 +12,6 @@ least-recently-checked tile within each queue.
 """
 
 import asyncio
-import os
 import time
 from email.utils import formatdate, parsedate_to_datetime
 from typing import TYPE_CHECKING, Iterable
@@ -23,6 +22,7 @@ from PIL import Image, UnidentifiedImageError
 
 from .config import get_config
 from .geometry import Rectangle, Size, Tile
+from .models import TileInfo
 from .palette import PALETTE, ColorsNotInPalette
 from .queues import QueueSystem
 
@@ -143,13 +143,12 @@ class TileChecker:
 
     async def check_next_tile(self) -> None:
         """Check one tile for changes using queue-based selection and update affected projects."""
-        from .models import TileInfo
-
         if not self.tiles:
             return  # No tiles to check
 
         # Select next tile from database via QueueSystem
         tile = await self.queue_system.select_next_tile()
+        logger.debug(f"About to check tile: {tile}")
         if not tile:
             return
 

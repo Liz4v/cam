@@ -19,6 +19,7 @@ import time
 from loguru import logger
 
 from .geometry import Tile
+from .models import TileInfo
 
 
 def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> list[int]:
@@ -122,7 +123,6 @@ class QueueSystem:
         Returns:
             Tile object to check, or None if no tiles available
         """
-        from .models import TileInfo
 
         # Determine current queue temperature (999 for burning, or 1 to num_queues)
         # Round-robin cycles through: burning (999), temp 1, temp 2, ..., temp N
@@ -153,8 +153,6 @@ class QueueSystem:
             new_last_update: Parsed Last-Modified timestamp or current time
             http_etag: ETag header value from response
         """
-        from .models import TileInfo
-
         now = round(time.time())
         tile_id = TileInfo.tile_id(tile.x, tile.y)
         tile_info = await TileInfo.get(id=tile_id)
@@ -183,12 +181,12 @@ class QueueSystem:
         Queries all non-burning tiles, sorts by last_update, and assigns
         temperature values (1-N) based on Zipf distribution.
         """
-        from .models import TileInfo
-
         # Fetch all non-burning tiles (queue_temperature != 999 and != 0)
         temp_tiles = (
-            await TileInfo.exclude(queue_temperature=999)
-            .exclude(queue_temperature=0)
+            await TileInfo.filter(
+                queue_temperature__gt=0,
+                queue_temperature__lt=999,
+            )
             .order_by("-last_update")
             .all()
         )
