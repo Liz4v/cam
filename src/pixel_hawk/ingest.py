@@ -30,61 +30,76 @@ if TYPE_CHECKING:
     from .projects import Project
 
 
-async def has_tile_changed(tile: Tile, client: httpx.AsyncClient) -> tuple[bool, int]:
+async def has_tile_changed(tile: Tile, client: httpx.AsyncClient, tile_info) -> tuple[bool, int, str]:
     """Downloads the indicated tile from the server and updates the cache.
 
-    Returns:
-        Tuple of (changed, last_modified_time):
-        - changed: True if tile content changed
-        - last_modified_time: Integer timestamp from server's Last-Modified header
+    Args:
+        tile: The tile to check
+        client: HTTP client
+        tile_info: TileInfo with cached last_update and http_etag for conditional requests
 
-    last_modified_time==0 indicates a server failure (network/decode error, status not 200 or 304)
+    Returns:
+        Tuple of (changed, new_last_update, new_http_etag):
+        - changed: True if tile was modified, False if 304 Not Modified or error
+        - new_last_update: Parsed timestamp from Last-Modified header, or current time if absent
+        - new_http_etag: ETag header value from response
+
+    Returns unchanged values on error (changed=False, existing values preserved).
     """
     url = f"https://backend.wplace.live/files/s0/tiles/{tile.x}/{tile.y}.png"
-
-    # Check for cached tile and prepare If-Modified-Since header
     cache_path = get_config().tiles_dir / f"tile-{tile}.png"
-    headers = {}
-    mtime = 0
-    if cache_path.exists():
-        mtime = round(cache_path.stat().st_mtime)
-        headers["If-Modified-Since"] = formatdate(mtime, usegmt=True)
+
+    # Build conditional request headers from TileInfo
+    request_headers = {}
+
+    # Add If-Modified-Since from tile_info.last_update
+    if tile_info.last_update > 0:
+        request_headers["If-Modified-Since"] = formatdate(tile_info.last_update, usegmt=True)
+
+    # Add If-None-Match from tile_info.http_etag
+    if tile_info.http_etag:
+        request_headers["If-None-Match"] = tile_info.http_etag
 
     try:
-        response = await client.get(url, headers=headers)
+        response = await client.get(url, headers=request_headers)
     except Exception as e:
         logger.debug(f"Tile {tile}: Request failed: {e}")
-        return False, 0
+        return False, tile_info.last_update, tile_info.http_etag  # Return unchanged on error
 
-    if response.status_code == 304:  # Not Modified
-        return False, mtime
+    # Handle 304 Not Modified (server validated our cache)
+    if response.status_code == 304:
+        # Cache is valid, return existing values
+        return False, tile_info.last_update, tile_info.http_etag
 
     if response.status_code != 200:
         logger.debug(f"Tile {tile}: HTTP {response.status_code}")
-        return False, 0
+        return False, tile_info.last_update, tile_info.http_etag  # Return unchanged on error
+
     data = response.content
 
-    # The server is known to always give us a Last-Modified header on 200 responses, so we rely on
-    # that. We require this information for queue management! If server behaviour changes, and we
-    # stop getting 304 responses, we may need to refactor to compare image data instead.
-    try:
-        last_modified = response.headers["Last-Modified"]
-        last_modified_timestamp = int(parsedate_to_datetime(last_modified).timestamp())
-    except Exception as e:
-        logger.warning(f"Tile {tile}: Failed to parse Last-Modified header: {e}")
-        # Fallback to current time, hoping we'll still get 304s next time if tile is unchanged
-        last_modified_timestamp = int(time.time())
+    # Parse Last-Modified header
+    last_modified_str = response.headers.get("Last-Modified", "")
+    if last_modified_str:
+        try:
+            new_last_update = round(parsedate_to_datetime(last_modified_str).timestamp())
+        except Exception:
+            new_last_update = round(time.time())
+    else:
+        new_last_update = round(time.time())
 
+    # Extract ETag
+    new_http_etag = response.headers.get("ETag", "")
+
+    # Save PNG to cache (NO mtime manipulation)
     try:
         async with PALETTE.aopen_bytes(data) as img:
             logger.info(f"Tile {tile}: Change detected, updating cache...")
             await asyncio.to_thread(img.save, cache_path)
-            os.utime(cache_path, (last_modified_timestamp, last_modified_timestamp))
     except (UnidentifiedImageError, ColorsNotInPalette) as e:
         logger.debug(f"Tile {tile}: image decode failed: {e}")
-        return False, 0
+        return False, tile_info.last_update, tile_info.http_etag  # Return unchanged on error
 
-    return True, last_modified_timestamp
+    return True, new_last_update, new_http_etag
 
 
 async def stitch_tiles(rect: Rectangle) -> Image.Image:
@@ -102,12 +117,11 @@ async def stitch_tiles(rect: Rectangle) -> Image.Image:
 
 
 class TileChecker:
-    """Manages temperature-based tile checking with Zipf-distributed queues.
+    """Manages temperature-based tile checking with database-backed queues.
 
     Uses QueueSystem to implement intelligent tile checking that prioritizes
     recently-modified tiles while still monitoring quieter areas. Tiles are
-    organized into a burning queue (never checked) and multiple temperature
-    queues (hot to cold) based on last modification time.
+    queried from the database on demand - no tile metadata is loaded into memory.
 
     Creates and owns an httpx.AsyncClient for tile fetching.
     """
@@ -115,65 +129,46 @@ class TileChecker:
     def __init__(self, projects: Iterable[Project]):
         """Initialize with projects to monitor. Creates an httpx.AsyncClient for tile fetching."""
         self.client = httpx.AsyncClient(timeout=5)
+
+        # Build tile→projects index (for diff operations)
         self.tiles: dict[Tile, set[Project]] = {}
-        self._build_index(projects)
-
-        # Initialize queue system with all indexed tiles
-        self.queue_system = QueueSystem(set(self.tiles.keys()), self.tiles)
-
-    def _build_index(self, projects: Iterable[Project]) -> None:
-        """Index tiles to projects for quick lookup."""
         for proj in projects:
             for tile in proj.rect.tiles:
                 self.tiles.setdefault(tile, set()).add(proj)
+
+        # Create QueueSystem (no initialization needed, queries DB on demand)
+        self.queue_system = QueueSystem()
+
         logger.info(f"Indexed {len(self.tiles)} tiles.")
-
-    def add_project(self, proj: Project) -> None:
-        """Add a project and index its tiles."""
-        new_tiles = set()
-        for tile in proj.rect.tiles:
-            if tile not in self.tiles:
-                new_tiles.add(tile)
-            self.tiles.setdefault(tile, set()).add(proj)
-
-        if new_tiles:
-            self.queue_system.add_tiles(new_tiles)
-
-    def remove_project(self, proj: Project) -> None:
-        """Remove a project and clean up its tiles from the index."""
-        removed_tiles = set()
-        for tile in proj.rect.tiles:
-            projs = self.tiles.get(tile)
-            if projs:
-                projs.discard(proj)
-                if not projs:
-                    del self.tiles[tile]
-                    removed_tiles.add(tile)
-
-        if removed_tiles:
-            self.queue_system.remove_tiles(removed_tiles)
 
     async def check_next_tile(self) -> None:
         """Check one tile for changes using queue-based selection and update affected projects."""
+        from .models import TileInfo
+
         if not self.tiles:
             return  # No tiles to check
 
-        tile_meta = self.queue_system.select_next_tile()
-        if not tile_meta:
-            logger.warning("No tile selected from queue system")
+        # Select next tile from database via QueueSystem
+        tile = await self.queue_system.select_next_tile()
+        if not tile:
             return
 
-        tile = tile_meta.tile
-        changed, last_modified = await has_tile_changed(tile, self.client)
-
-        if last_modified == 0:
-            # Server failure - don't update metadata or advance round-robin
+        # Fetch TileInfo (required for conditional request headers)
+        tile_id = TileInfo.tile_id(tile.x, tile.y)
+        try:
+            tile_info = await TileInfo.get(id=tile_id)
+        except Exception as e:
+            logger.error(f"TileInfo not found for {tile}: {e}")
             self.queue_system.retry_current_queue()
             return
 
-        # Update queue system with check results
-        self.queue_system.update_tile_after_check(tile, last_modified)
+        # Check tile with ETag support
+        changed, new_last_update, new_http_etag = await has_tile_changed(tile, self.client, tile_info)
 
+        # Update tile in database
+        await self.queue_system.update_tile_after_check(tile, new_last_update, new_http_etag)
+
+        # Diff against affected projects
         for proj in self.tiles.get(tile) or ():
             if changed:
                 await proj.run_diff(changed_tile=tile)

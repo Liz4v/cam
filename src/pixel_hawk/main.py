@@ -15,7 +15,7 @@ import asyncio
 from loguru import logger
 
 from .config import get_config
-from .db import database
+from .db import build_tile_project_relationships, database
 from .ingest import TileChecker
 from .models import Person, ProjectInfo, ProjectState
 from .projects import Project
@@ -48,10 +48,13 @@ class Main:
         self.projects = {p.info.id: p for p in projects_list}
         logger.info(f"Loaded {len(self.projects)} projects from database.")
 
+        # Build tile-project relationships and create TileInfo records
+        await build_tile_project_relationships(projects_list)
+
         # Update watched tiles counts
         await self._update_all_person_tile_counts()
 
-        # Initialize tile checker with only ACTIVE projects
+        # Initialize tile checker with only ACTIVE projects (simple sync init, no DB loading needed)
         active_projects = [p for p in projects_list if p.info.state == ProjectState.ACTIVE]
         self.tile_checker = TileChecker(active_projects)
         logger.info(f"Monitoring {len(active_projects)} active projects ({len(projects_list) - len(active_projects)} passive).")

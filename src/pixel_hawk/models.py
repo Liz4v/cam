@@ -5,6 +5,8 @@ ProjectInfo: Pure Tortoise ORM model for project metadata.
 ProjectState: Enum for project state (active/passive/inactive).
 HistoryChange: Per-diff event log recording pixel changes.
 DiffStatus: Enum for project diff states.
+TileInfo: Database-backed tile metadata (coordinates, timestamps, queue assignment, HTTP headers).
+TileProject: Junction table for many-to-many tile-project relationships.
 """
 
 import time
@@ -179,3 +181,50 @@ class HistoryChange(Model):
     class Meta(Model.Meta):
         table = "history_change"
         ordering = ["-timestamp"]
+
+
+class TileInfo(Model):
+    """Persistent metadata for a single WPlace tile."""
+
+    # Primary key: encoded from coordinates as x*10000+y (fits in 63 bits, manually set)
+    id = fields.IntField(primary_key=True, generated=False)
+
+    # Tile coordinates
+    tile_x = fields.IntField()
+    tile_y = fields.IntField()
+
+    # Queue assignment (999 = burning queue, 1-998 = temperature index, 0 = not in any queue)
+    queue_temperature = fields.IntField(default=999)
+
+    # Timing metadata (IntField for integer epoch seconds, following project convention)
+    last_checked = fields.IntField(default=0)  # When we last fetched this tile (0 = never checked)
+    last_update = fields.IntField()  # Parsed from Last-Modified header, or current time if not provided
+
+    # HTTP caching header (for conditional requests)
+    http_etag = fields.CharField(max_length=255, default="")  # Raw ETag header
+
+    # Reverse relation (defined by TileProject.tile FK with related_name="tile_projects")
+    tile_projects: fields.ReverseRelation["TileProject"]
+
+    @staticmethod
+    def tile_id(x: int, y: int) -> int:
+        """Compute primary key from tile coordinates."""
+        return x * 10000 + y
+
+    class Meta(Model.Meta):
+        table = "tile_info"
+        indexes = [
+            ("queue_temperature", "last_checked"),  # Composite index for LRU selection within queues
+        ]
+
+
+class TileProject(Model):
+    """Many-to-many relationship between tiles and projects."""
+
+    id = fields.IntField(primary_key=True)
+    tile = fields.ForeignKeyField("models.TileInfo", related_name="tile_projects")
+    project = fields.ForeignKeyField("models.ProjectInfo", related_name="project_tiles")
+
+    class Meta(Model.Meta):
+        table = "tile_project"
+        unique_together = (("tile_id", "project_id"),)
