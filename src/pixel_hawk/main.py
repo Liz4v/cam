@@ -1,13 +1,10 @@
 """Application entry point and unified polling loop.
 
-The Main class orchestrates the application lifecycle: it loads projects from the
-database on startup, indexes their tiles, and runs a ~97 second polling loop (60φ seconds,
+The Main class orchestrates the application lifecycle: initializes the TileChecker,
+refreshes person-level statistics, and runs a ~97 second polling loop (60φ seconds,
 chosen to avoid resonance with WPlace's internal timers). Each cycle checks one
-tile for changes (via TileChecker).
-
-Projects are loaded from the database (not discovered from filesystem) and are static
-after initial load. Future project management will be via API/UI that modifies ProjectInfo
-records. Application restart required to pick up new projects.
+tile for changes (via TileChecker), which queries the database for affected projects
+on demand.
 """
 
 import asyncio

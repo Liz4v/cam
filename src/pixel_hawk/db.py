@@ -2,7 +2,6 @@
 
 Owns the TORTOISE_ORM config dict used by both the application and Aerich.
 Provides database() async context manager for application lifecycle.
-Provides build_tile_project_relationships() for creating tiles and junction table entries.
 """
 
 from contextlib import asynccontextmanager

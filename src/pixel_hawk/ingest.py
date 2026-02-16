@@ -1,4 +1,4 @@
-"""Tile fetching, caching, and temperature-based queue checking.
+"""Tile fetching, caching, and query-driven project diffing.
 
 Manages communication with the WPlace tile backend. Tiles are downloaded from
 https://backend.wplace.live/files/s0/tiles/{x}/{y}.png and cached locally as
@@ -8,7 +8,9 @@ The TileChecker class implements intelligent tile monitoring using temperature-
 based queues with Zipf distribution: burning queue for never-checked tiles,
 and multiple hot-to-cold queues based on modification time. Checks exactly one
 tile per polling cycle, selecting round-robin between queues and choosing the
-least-recently-checked tile within each queue.
+least-recently-checked tile within each queue. When a tile changes, affected
+projects are discovered via database query through the TileProject junction
+table, and Project objects are constructed on demand for diffing.
 """
 
 import asyncio

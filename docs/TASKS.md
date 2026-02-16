@@ -39,55 +39,13 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 
 ---
 
-### Use TileProject table for query-driven project lookups
-
-**Status:** Backlog
-**Priority:** Medium
-
-**Description:**
-Eliminate the in-memory tile→projects mapping in `TileChecker` and use database queries via the `TileProject` junction table instead. Currently, `TileChecker.__init__()` builds a `dict[Tile, set[Project]]` by iterating through all projects at startup. After a tile update, this dict is used to find affected projects for diffing. Replace this with direct database queries.
-
-**Current Approach:**
-```python
-# TileChecker.__init__() builds in-memory mapping
-self.tiles: dict[Tile, set[Project]] = {}
-for project in projects:
-    for tile in project.rect.tiles:
-        self.tiles.setdefault(tile, set()).add(project)
-
-# check_next_tile() uses in-memory mapping
-projects = self.tiles[tile]
-for project in projects:
-    await project.run_diff(changed_tile=tile)
-```
-
-**Target Approach:**
-```python
-# check_next_tile() queries database instead
-tile_id = TileInfo.tile_id(tile.x, tile.y)
-tile_projects = await TileProject.filter(tile_id=tile_id).prefetch_related('project')
-for tp in tile_projects:
-    project = self.projects[tp.project_id]  # Look up from Main's projects dict
-    await project.run_diff(changed_tile=tile)
-```
-
-**Implementation Steps:**
-1. Remove `self.tiles` dict from `TileChecker.__init__()`
-2. Update `check_next_tile()` to query `TileProject` table after tile update
-3. Use `prefetch_related('project')` for efficient querying
-4. Update tests to verify database query behavior
-
-**Benefits:**
-- Eliminates redundant in-memory mapping (data already in database)
-- Reduces memory footprint (no duplicate tile→project index)
-- Query-driven architecture consistent with `QueueSystem`
-- Automatically reflects project additions/removals without rebuilding index
-
----
-
 ## Completed
 
 > **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
+
+### ✅ Query-driven project lookups via TileProject table (2026-02-16)
+
+Eliminated the in-memory `dict[Tile, set[Project]]` mapping from `TileChecker` and replaced it with on-demand database queries through the `TileProject` junction table. `TileChecker.__init__()` no longer accepts projects; after each tile check, `_get_projects_for_tile()` queries `ProjectInfo` via `project_tiles__tile_id` with `prefetch_related("owner")`, filtering to ACTIVE and PASSIVE states (INACTIVE excluded). `Project` objects are constructed on demand for each diff cycle. Removed `Main.projects` dict and all project-loading logic from `Main.start()` — startup now only initializes the tile checker and refreshes person totals. PASSIVE projects now correctly receive diffs when their tiles change (previously excluded). Added new tests for state filtering (inactive skipped, passive included) and database-driven project lookups. All 177 tests passing with 97.56% coverage.
 
 ### ✅ Database-backed tile queue system migration (2026-02-15)
 

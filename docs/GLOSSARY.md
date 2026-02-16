@@ -11,7 +11,7 @@ Pixel Hawk — the application that watches WPlace paint projects, polls tile im
 [WPlace.live](https://wplace.live) is an online collaborative pixel art canvas where users place individual pixels. The canvas is organized into tiles, each containing 1000×1000 pixels.
 
 ### Project
-A user-created PNG image file representing artwork to be painted on WPlace. Projects must be placed in the platform pictures folder under `wplace/` subdirectory and must use the WPlace palette. Filenames must include 4 coordinates in format `*_<tx>_<ty>_<px>_<py>.png` where tx/ty are tile coordinates and px/py are pixel offsets within the tile.
+A user-created PNG image file representing artwork to be painted on WPlace. Projects are stored in `<nest>/projects/{person_id}/` and must use the WPlace palette. Filenames use coordinate-only format: `{tx}_{ty}_{px}_{py}.png` where tx/ty are tile coordinates and px/py are pixel offsets within the tile. Projects must be created as database records first (database-first workflow).
 
 ## Geometry & Coordinates
 
@@ -97,21 +97,21 @@ Local storage of downloaded tiles as paletted PNG files in the user cache direct
 Assembling multiple cached tiles together to create a larger image covering a project's bounding rectangle. This process also includes cropping the excess pixels to match project size exactly.
 
 ### Has Tile Changed
-Function that requests a tile from the WPlace backend and updates the local cache if changes are detected. Returns a tuple of (changed, last_modified_time).
+Method on `TileChecker` that requests a tile from the WPlace backend and updates the local cache if changes are detected. Takes a `TileInfo` instance (mutated in place with updated timestamps and etag) and returns a boolean indicating whether the tile changed.
 
 ### TileChecker
-Class that orchestrates tile monitoring: selects tiles via QueueSystem, calls has_tile_changed(), and triggers project diffs when changes are detected.
+Class that orchestrates tile monitoring: selects tiles via QueueSystem, calls has_tile_changed(), queries affected projects via the TileProject junction table, and triggers project diffs when changes are detected. No in-memory tile→project mapping — project lookups are fully query-driven.
 
 ## Project Lifecycle
 
 ### Project Discovery
-Scanning the `wplace/` pictures directory for PNG files with valid coordinate information in their filenames.
+Query-driven lookup of affected projects when a tile changes. `TileChecker` queries the `TileProject` junction table to find `ProjectInfo` records linked to the changed tile, then constructs `Project` objects on demand.
 
 ### Snapshot
 A PNG image saved alongside a project that captures the previous canvas state. Used to detect progress/regress by comparing the current state against the previous state.
 
 ### Metadata
-Project statistics and history stored in YAML files alongside project images. Tracks completion, progress/regress totals, rates, and tile update times.
+Project statistics and history stored in the `ProjectInfo` database table via Tortoise ORM. Tracks completion, progress/regress totals, rates, and tile update times. Business logic lives in `metadata.py` as standalone functions.
 
 ### Completion Percentage
 The percentage of target pixels that are correctly placed on the canvas.
@@ -154,7 +154,7 @@ Configurable directory structure managed by `config.py`. Default nest is `./nest
 `<user_log_path>/pixel-hawk.log` — where application logs are written.
 
 ### Metadata File
-YAML file saved alongside each project as `<project_name>.yaml` containing all metadata and statistics.
+`ProjectInfo` record in the SQLite database containing all metadata and statistics for a project. Previously stored as YAML files alongside projects; now persisted via Tortoise ORM.
 
 ### Snapshot File
 PNG file saved in `snapshots/{person_id}/{tx}_{ty}_{px}_{py}.png` containing the previous canvas state. Uses the same directory structure and filename format as projects.
@@ -185,13 +185,9 @@ When a tile moves to a hotter queue, coldest tiles from intervening queues move 
 ## Python Conventions
 
 ### NamedTuple
-Immutable Python type used for geometric primitives (Tile, Point, Size, Rectangle) that provid This is why hot tiles get checked more frequently than cold tiles.
+Immutable Python type used for geometric primitives (Tile, Point, Size, Rectangle) that provide tuple-like access with named fields.
 
-### Missing Tiles
-Tiles required by a project that haven't been fetched from the server yet. Projects with missing tiles may show inaccurate completion percentages until all tiles are cached & Formats
-
-### YAML
-YAML Ain't Markup Language — human-readable data serialization format used for metadata files saved alongside projects.
+## File Formats
 
 ### PNG
-Portable Network Graphics — lossless image format used for all cached tiles, projects, and snapshots
+Portable Network Graphics — lossless image format used for all cached tiles, projects, and snapshots.

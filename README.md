@@ -9,7 +9,7 @@ pixel-hawk polls WPlace tile images, stitches cached tiles, and diffs them again
 - Uses intelligent temperature-based queue system with Zipf distribution to prioritize hot tiles
 - Checks one tile per cycle in round-robin fashion across burning and temperature queues
 - Downloads and caches WPlace tiles when they change
-- Loads projects from SQLite database at startup (database-first architecture)
+- Discovers affected projects on demand via database queries (query-driven architecture)
 - Diffs updated tiles against project images
 - Tracks watched tiles per person with overlap deduplication
 - Logs pixel placement progress with owner attribution
@@ -132,13 +132,13 @@ print(f"Create file at: projects/{person.id}/{info.filename}")
 2. Save it at: `<nest>/projects/{person_id}/{tx}_{ty}_{px}_{py}.png`
    - Filename is **coordinates only** (no project name prefix)
    - Example: `projects/1/0_0_500_500.png` for person_id=1
-3. The watcher will load it from the database on next startup
+3. The watcher will discover it automatically when its tiles are checked
 
 ### Project states
 
-- **ACTIVE**: Monitored for tile changes (default)
-- **PASSIVE**: Loaded but not actively monitored
-- **INACTIVE**: Not loaded (for pausing projects without deleting)
+- **ACTIVE**: Tiles are queued for monitoring; diffs run when tiles change (default)
+- **PASSIVE**: Not queued, but diffs run when overlapping tiles are checked for other projects
+- **INACTIVE**: Completely excluded from monitoring
 
 ### Where data lives
 

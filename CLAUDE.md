@@ -50,11 +50,11 @@ uv run hawk
 
 ## How it works (high level)
 
-- **Multi-user, database-first architecture**: The application loads projects from SQLite at startup (no filesystem polling). Multiple users can track the same or different coordinates. Projects are keyed by (owner_id, name) with unique constraint.
+- **Multi-user, query-driven architecture**: Projects are stored in SQLite and discovered on demand via database queries — no in-memory project index. Multiple users can track the same or different coordinates. Projects are keyed by (owner_id, name) with unique constraint.
 - The application is fully async, built on `asyncio`. The entry point (`main()`) calls `asyncio.run()` on the async main loop. Blocking I/O (PIL image operations, filesystem access) is offloaded via `asyncio.to_thread`.
 - The application runs in a unified ~97 second polling loop (60φ = 30(1+√5), chosen to avoid resonance with WPlace's internal timers) that checks tiles.
 - Tile polling uses intelligent temperature-based queue system: `QueueSystem` (in `queues.py`) maintains burning and temperature queues with Zipf distribution sizing. Tiles are selected round-robin across queues, with least-recently-checked tile selected from each queue.
-- `TileChecker` (in `ingest.py`) manages tile monitoring: creates and owns an `httpx.AsyncClient`, selects tiles via `QueueSystem`, calls `has_tile_changed()` to fetch from WPlace backend, and triggers project diffs when changes are detected.
+- `TileChecker` (in `ingest.py`) manages tile monitoring: creates and owns an `httpx.AsyncClient`, selects tiles via `QueueSystem`, calls `has_tile_changed()` to fetch from WPlace backend, queries affected projects via `TileProject` junction table, and constructs `Project` objects on demand for diffing.
 - `has_tile_changed()` (in `ingest.py`) requests tiles from the WPlace tile backend using `httpx` and updates a cached paletted PNG if there are changes.
 - `Person` (in `models.py`) represents users with auto-increment ID. Tracks `watched_tiles_count` (unique tiles across all active projects) and `active_projects_count`. Both updated via `update_totals()` on startup.
 - `ProjectState` IntEnum (in `models.py`) defines project states: ACTIVE (0), PASSIVE (10), INACTIVE (20).
@@ -63,7 +63,7 @@ uv run hawk
 - Business logic for ProjectInfo lives in `metadata.py` as standalone functions (functional service layer). Functions take `ProjectInfo` as first parameter and mutate fields in place. Log messages include owner name for multi-user attribution.
 - `Project` (in `projects.py`) is loaded from database via `Project.from_info(info)` classmethod. Filenames are coordinate-only: `{tx}_{ty}_{px}_{py}.png` (tile x, tile y, pixel x 0-999, pixel y 0-999). Files must use the project's palette. Invalid files cause from_info() to return None with warning logged.
 - `PALETTE` (in `palette.py`) enforces and converts images to the project palette (first color treated as transparent). Provides `AsyncImage[T]` for deferred async I/O, and `aopen_file`/`aopen_bytes` methods for async image loading.
-- `Main` (in `main.py`) uses two-phase initialization: sync `__init__` followed by `async start()` to load projects from database. Database lifecycle managed via `async with database():` context manager. Queries ProjectInfo table for active/passive projects, calls `Project.from_info()` for each, calls `update_totals()` for all persons, and builds tile index. Runs the polling loop: `TileChecker.check_next_tile()` handles tile selection and checking. On tile changes it diffs updated tiles with project images and logs progress with owner attribution.
+- `Main` (in `main.py`) uses two-phase initialization: sync `__init__` followed by `async start()` to initialize `TileChecker` and refresh person-level statistics. Database lifecycle managed via `async with database():` context manager. No in-memory project loading — project discovery happens on demand in `TileChecker._get_projects_for_tile()`. Runs the polling loop: `TileChecker.check_next_tile()` handles tile selection, checking, project querying, and diffing.
 - Queue system tracks tile metadata (last checked, last modified) and repositions tiles surgically when modification times change. When a tile moves to a hotter queue, coldest tiles cascade down through intervening queues to maintain Zipf distribution sizes.
 
 ## File/Module map (where to look)
@@ -72,11 +72,11 @@ uv run hawk
 - `src/pixel_hawk/config.py` — `Config` dataclass, `load_config()`, `get_config()`, CONFIG singleton
 - `src/pixel_hawk/db.py` — database async context manager (`database()`), Tortoise ORM config, Aerich integration
 - `src/pixel_hawk/models.py` — `Person` (user model with watched_tiles_count, active_projects_count, update_totals()), `ProjectState` IntEnum (ACTIVE/PASSIVE/INACTIVE), `ProjectInfo` (pure Tortoise model with owner FK), `HistoryChange` (diff event log), `DiffStatus` IntEnum, `TileInfo` (tile metadata: coordinates, heat, timestamps, etag), `TileProject` (tile-project junction table)
-- `src/pixel_hawk/main.py` — application entry, unified polling loop, database-first project loading, DB context manager usage, watched tiles tracking
+- `src/pixel_hawk/main.py` — application entry, unified polling loop, DB context manager usage, person totals refresh
 - `src/pixel_hawk/geometry.py` — `Tile`, `Point`, `Size`, `Rectangle` helpers (tile math)
-- `src/pixel_hawk/ingest.py` — `TileChecker` (tile monitoring orchestration, owns `httpx.AsyncClient`), `has_tile_changed()` (async tile download), `stitch_tiles()` (async canvas assembly)
+- `src/pixel_hawk/ingest.py` — `TileChecker` (tile monitoring orchestration, owns `httpx.AsyncClient`, query-driven project lookups via `TileProject`), `has_tile_changed()` (async tile download)
 - `src/pixel_hawk/palette.py` — palette enforcement + `PALETTE` singleton + `AsyncImage[T]` (deferred async I/O handle)
-- `src/pixel_hawk/projects.py` — `Project` model (async diffs, snapshots, database-first loading via from_info())
+- `src/pixel_hawk/projects.py` — `Project` model (async diffs, snapshots, database-first loading via from_info()), `stitch_tiles()` (async canvas assembly)
 - `src/pixel_hawk/metadata.py` — functional service layer for ProjectInfo business logic (pixel counting, snapshot comparison, rate tracking, owner-attributed logging)
 - `src/pixel_hawk/queues.py` — `QueueSystem`, temperature-based tile queues with Zipf distribution, tile metadata tracking
 - `scripts/rebuild.py` — Idempotent database rebuild from filesystem artifacts (projects, tiles, snapshots)
@@ -104,14 +104,14 @@ This project embraces core principles from PEP 20 ("The Zen of Python"):
 - Async patterns:
   - The project is fully async. Use `async def` for I/O-bound functions. Use `asyncio.to_thread` for blocking PIL/filesystem operations.
   - HTTP requests use `httpx.AsyncClient` (owned by `TileChecker`).
-  - `Main` uses two-phase init: sync `__init__` + `async start()` (avoids async `__init__` anti-pattern).
+  - `Main` uses two-phase init: sync `__init__` + `async start()` (avoids async `__init__` anti-pattern). `start()` initializes `TileChecker` and refreshes person statistics — no project loading.
 - Image handling:
   - Use `PALETTE.ensure(image)` for conversion; no palette manipulation outside `palette.py`.
   - Always close PIL `Image` objects. In async code, prefer `async with PALETTE.aopen_file(path) as im:` or `async with PALETTE.aopen_bytes(data) as im:`. In sync code, prefer `with PALETTE.open_file(path) as im:`.
   - `AsyncImage[T]` wraps a blocking callable, runs it in a thread on first access, and supports both `async with` (auto-closes) and `await handle()` (caller closes) patterns.
   - For functions returning PIL images, use `with await async_fn() as im:` (the sync context manager on the async result).
 - Time and date: prefer `round(time.time())` for timestamps to get integer seconds, which simplifies metadata and logging. Avoid using raw `time.time()` as well as `datetime` to keep things simple and consistent.
-- Project state: Projects are loaded from database at startup and kept in memory during runtime. `ProjectInfo` persists to SQLite via Tortoise ORM (`await info.save()`). `Project.info` (not `.metadata`) holds the `ProjectInfo` instance. Business logic uses functional service layer: `metadata.process_diff(info, ...)` instead of `info.process_diff(...)`. The projects dict is keyed by `ProjectInfo.id` (integer), not by Path.
+- Project state: `ProjectInfo` persists to SQLite via Tortoise ORM (`await info.save()`). `Project` objects are constructed on demand (not cached in memory) when `TileChecker` needs to diff affected projects. `Project.info` (not `.metadata`) holds the `ProjectInfo` instance. Business logic uses functional service layer: `metadata.process_diff(info, ...)` instead of `info.process_diff(...)`.
 - Multi-user workflow: Each Person has an auto-increment ID. ProjectInfo has an owner FK to Person. Directory structure is `projects/{person_id}/{filename}` where filename is coordinate-only. Names are stored in the database only. Watched tiles are tracked per person with overlap deduplication.
 - Error handling: prefer non-fatal logging (warnings/debug) and avoid raising unexpected exceptions in the polling loop.
 - Defensive programming: Use assertions for "shouldn't happen" cases that indicate logic errors. These should be tested to ensure they catch bugs during development. Example: `assert condition, "clear error message"` for invariants that must hold.
@@ -135,8 +135,8 @@ This project embraces core principles from PEP 20 ("The Zen of Python"):
 
 ## Running and debugging
 
-- To debug tile fetching behavior, call `await has_tile_changed(tile, client)` with a `Tile` object and an `httpx.AsyncClient` in an async script and observe `get_config().tiles_dir` for generated `tile-*.png` files.
-- To debug project loading: Create a Person and ProjectInfo record in the database, place the PNG file in `projects/{person_id}/{tx}_{ty}_{px}_{py}.png`, and watch the log output from `Main.start()`. Use `Project.from_info(info)` to test individual project loading.
+- To debug tile fetching behavior, create a `TileChecker`, call `await checker.has_tile_changed(tile_info)` with a `TileInfo` instance, and observe `get_config().tiles_dir` for generated `tile-*.png` files.
+- To debug project diffing: Create Person, ProjectInfo, TileInfo, and TileProject records in the database, place the PNG file in `projects/{person_id}/{tx}_{ty}_{px}_{py}.png`, and trigger `check_next_tile()`. Projects are discovered on demand via database query — no startup loading step needed.
 
 ## Code change guidelines
 
