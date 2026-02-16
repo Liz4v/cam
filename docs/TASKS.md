@@ -39,9 +39,59 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 
 ---
 
+### Use TileProject table for query-driven project lookups
+
+**Status:** Backlog
+**Priority:** Medium
+
+**Description:**
+Eliminate the in-memory tile→projects mapping in `TileChecker` and use database queries via the `TileProject` junction table instead. Currently, `TileChecker.__init__()` builds a `dict[Tile, set[Project]]` by iterating through all projects at startup. After a tile update, this dict is used to find affected projects for diffing. Replace this with direct database queries.
+
+**Current Approach:**
+```python
+# TileChecker.__init__() builds in-memory mapping
+self.tiles: dict[Tile, set[Project]] = {}
+for project in projects:
+    for tile in project.rect.tiles:
+        self.tiles.setdefault(tile, set()).add(project)
+
+# check_next_tile() uses in-memory mapping
+projects = self.tiles[tile]
+for project in projects:
+    await project.run_diff(changed_tile=tile)
+```
+
+**Target Approach:**
+```python
+# check_next_tile() queries database instead
+tile_id = TileInfo.tile_id(tile.x, tile.y)
+tile_projects = await TileProject.filter(tile_id=tile_id).prefetch_related('project')
+for tp in tile_projects:
+    project = self.projects[tp.project_id]  # Look up from Main's projects dict
+    await project.run_diff(changed_tile=tile)
+```
+
+**Implementation Steps:**
+1. Remove `self.tiles` dict from `TileChecker.__init__()`
+2. Update `check_next_tile()` to query `TileProject` table after tile update
+3. Use `prefetch_related('project')` for efficient querying
+4. Update tests to verify database query behavior
+
+**Benefits:**
+- Eliminates redundant in-memory mapping (data already in database)
+- Reduces memory footprint (no duplicate tile→project index)
+- Query-driven architecture consistent with `QueueSystem`
+- Automatically reflects project additions/removals without rebuilding index
+
+---
+
 ## Completed
 
 > **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
+
+### ✅ Database-backed tile queue system migration (2026-02-15)
+
+Migrated tile queue system from memory-based (with file mtime persistence) to database-backed storage using Tortoise ORM: added `TileInfo` model with computed primary key (`id = x*10000 + y`), composite index on `(queue_temperature, last_checked)`, and fields for coordinates, timestamps (`last_checked`, `last_update`), HTTP headers (`http_etag`), and queue assignment (999=burning, 1-998=temperature indices, 0=inactive); added `TileProject` junction table for many-to-many tile-project relationships; completely rewrote `QueueSystem` for query-driven architecture (queries database on each `select_next_tile()` call instead of loading all tiles into memory); implemented lazy Zipf distribution rebuilds (only when burning queue tiles graduate); added full ETag support with dual-header validation (If-Modified-Since + If-None-Match); updated `has_tile_changed()` signature to take mandatory `TileInfo` parameter and return `(bool, int, str)` tuple; removed all file mtime logic (`os.utime()` and `stat().st_mtime` calls eliminated); implemented `build_tile_project_relationships()` in db.py to create TileInfo records on startup with `last_update` set to earliest project's `first_seen`; burning queue semantics preserved with `last_checked=0` for never-checked tiles. All type checking passed, migration applied successfully.
 
 ### ✅ Migrate data to SQLite (2026-02-15)
 
