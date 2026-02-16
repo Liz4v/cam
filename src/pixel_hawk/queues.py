@@ -1,25 +1,33 @@
 """Heat-based tile queue system with Zipf distribution.
 
 Implements intelligent tile checking using database-backed heat queues:
-- Burning queue (temp=999): tiles that have never been checked (last_checked=0)
-- Heat queues (temp=1-998): higher temp = hotter (more recently updated)
-- Inactive (temp=0): tiles with no active projects
+- Burning queue (heat=999): tiles not yet checked (last_update=0)
+- Heat queues (heat=1-998): higher temp = hotter (more recently updated)
+- Inactive (heat=0): tiles with no active projects
 
 Queue sizes follow Zipf distribution (harmonic series), with the hottest queue
-having a specific number of tiles and the coldest having the most. Tiles are selected
-round-robin between queues, querying the database for the least-recently-checked tile
-within each queue.
+having a specific number of tiles and the coldest having the most.
 
-This module is query-driven: no tile metadata is loaded into memory. The database
-is the single source of truth for all tile state.
+An in-memory iterator cycles through queues from burning to coldest. When the
+iterator completes a full cycle, redistribution runs automatically. Burning
+tiles graduate into temperature queues when redistribution discovers them
+(last_update > 0) — no manual heat changes on check.
+
+Redistribution is optimistic: it computes target heats and only writes tiles
+whose current heat differs from the target.
 """
+
+import functools
+from collections import defaultdict
+from collections.abc import Iterator
 
 from loguru import logger
 
 from .models import TileInfo
 
 
-def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> list[int]:
+@functools.lru_cache(3)
+def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> tuple[int, ...]:
     """Calculate queue sizes following Zipf distribution (harmonic series).
 
     Returns a list of queue sizes from hottest to coldest, where:
@@ -36,7 +44,7 @@ def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> l
         List of queue sizes from hottest to coldest (e.g., [5, 10, 20, 65])
     """
     if total_tiles <= min_hottest_size:
-        return [total_tiles] if total_tiles > 0 else []
+        return (total_tiles,) if total_tiles > 0 else ()
 
     # Calculate number of queues that satisfies min hottest size
     # For k queues with reverse Zipf, hottest queue gets:
@@ -92,118 +100,96 @@ def calculate_zipf_queue_sizes(total_tiles: int, min_hottest_size: int = 4) -> l
                 sizes[i] -= 1
                 remainder += 1
 
-    return sizes
+    return tuple(sizes)
 
 
 class QueueSystem:
     """Manages heat-based tile queues with Zipf distribution.
 
     Query-driven architecture: selects tiles by querying database for least
-    recently checked tile in current queue. No tile metadata is loaded into
-    memory - the database is the single source of truth.
+    recently checked tile in current queue. The database is the single source
+    of truth for all tile state.
 
-    Maintains a burning queue (temp=999) for never-checked tiles and multiple
-    heat queues (temp=1 to num_queues) where higher temp = hotter.
-    Selects tiles round-robin: burning, then hottest to coldest.
+    An in-memory iterator cycles through burning (999), then hottest to coldest
+    temperature queues. When the iterator exhausts, redistribute_queues() runs
+    and a fresh iterator is created. Burning tiles graduate automatically when
+    redistribution discovers they have last_update > 0.
     """
 
     def __init__(self):
-        """Initialize queue system with database-backed selection."""
-        self.current_queue_index = 0  # Round-robin position across queues
-        self.num_queues = 0  # Set by start() from existing DB state, updated by _rebuild_zipf_distribution
+        """Initialize queue system with empty iterator."""
+        self.queue_iterator: Iterator[int] = iter(())
+        self.num_queues = 0  # Set by start(), updated by redistribute_queues
 
     async def start(self) -> None:
-        """Load num_queues from existing database state. Call after DB is ready."""
-        await self._rebuild_zipf_distribution()
+        """Load queue state from existing database. Call after DB is ready."""
+        await self.redistribute_queues()
 
     async def select_next_tile(self) -> TileInfo | None:
-        """Select next tile to check using round-robin across heat queues.
+        """Select next tile to check by advancing through heat queues.
 
-        Queries database directly for least recently checked tile in current queue.
-        Skips empty queues, trying all queues before giving up.
+        Iterates from burning (999) through hottest to coldest queue, querying
+        the database for the least recently checked tile. When the iterator
+        exhausts (full cycle), triggers redistribution and starts a new cycle.
 
         Returns:
-            TileInfo to check, or None if all queues are empty
+            TileInfo to check, or None if no tiles exist
         """
+        tile = await self._try_select()
+        if tile:
+            return tile
 
-        # Determine current queue heat (999 for burning, or 1 to num_queues)
-        # Round-robin cycles through: burning (999), then hottest (N) down to coldest (1)
-        heats = [999] + list(range(self.num_queues, 0, -1))
-        total_queues = len(heats)
+        # Iterator exhausted — full cycle complete, redistribute and retry
+        await self.redistribute_queues()
+        return await self._try_select()
 
-        # Try each queue starting from current position; skip empty queues
-        for _ in range(total_queues):
-            current_temp = heats[self.current_queue_index % total_queues]
+    async def redistribute_queues(self) -> None:
+        """Reassign heat values using Zipf distribution, optimistically.
 
-            # Query database for least recently checked tile in this heat queue
-            tile_info = await TileInfo.filter(heat=current_temp).order_by("last_checked").first()
-
-            # Advance round-robin index for next call
-            self.current_queue_index += 1
-
-            if tile_info:
-                logger.debug(f"Using queue temp={current_temp}")
-                return tile_info
-
-        return None
-
-    async def update_tile_after_check(self, tile_info: TileInfo) -> None:
-        """Persist tile_info to database and handle burning→heat graduation.
-
-        Assumes tile_info fields (last_checked, last_update, etag) have
-        already been updated by the caller (has_tile_changed).
-
-        Args:
-            tile_info: The TileInfo with updated fields to persist
+        Selects tiles with heat > 0 and last_update > 0 (checked at least once),
+        which includes burning tiles that have been checked. Computes target heat
+        for each tile based on last_update recency, and only updates tiles whose
+        current heat differs from the target.
         """
-        was_burning = tile_info.heat == 999
-
-        # Graduate from burning queue into regular heat pool
-        if was_burning:
-            tile_info.heat = 1  # Temporary; rebuild will reassign
-
-        await tile_info.save()
-
-        # If tile graduated from burning queue, trigger Zipf rebuild
-        if was_burning:
-            await self._rebuild_zipf_distribution()
-
-    async def _rebuild_zipf_distribution(self) -> None:
-        """Rebuild heat assignments using Zipf distribution.
-
-        Only called when tiles graduate from burning queue.
-        Queries all non-burning tiles, sorts by last_update, and assigns
-        heat values (1-N) based on Zipf distribution.
-        """
-        # Fetch all non-burning tiles (heat in [1,998])
-        temp_tiles = await TileInfo.filter(heat__gt=0, heat__lt=999).order_by("-last_update").all()
+        # Fetch all tiles eligible for temperature queues:
+        # heat > 0 excludes inactive; last_update > 0 excludes never-checked burning
+        temp_tiles = await TileInfo.filter(heat__gt=0, last_update__gt=0).order_by("-last_update").all()
 
         if not temp_tiles:
             self.num_queues = 0
+            self.queue_iterator = iter([999])
             return
 
-        # Calculate Zipf queue sizes
-        num_tiles = len(temp_tiles)
-        queue_sizes = calculate_zipf_queue_sizes(num_tiles)
+        queue_sizes = calculate_zipf_queue_sizes(len(temp_tiles))
         self.num_queues = len(queue_sizes)
+        self.queue_iterator = iter([999] + list(range(self.num_queues, 0, -1)))
 
-        # Assign tiles to heat queues (hottest = most recent last_update)
+        # Walk tiles and collect mismatches grouped by target heat
+        updates: defaultdict[int, list[int]] = defaultdict(list)
         current_idx = 0
         for temp_idx, queue_size in enumerate(queue_sizes):
-            tiles_in_queue = temp_tiles[current_idx : current_idx + queue_size]
-            tile_ids = [t.id for t in tiles_in_queue]
-
-            # Bulk update: hottest tiles (temp_idx=0) get highest heat number
-            await TileInfo.filter(id__in=tile_ids).update(heat=self.num_queues - temp_idx)
-
+            target_heat = self.num_queues - temp_idx
+            for tile in temp_tiles[current_idx : current_idx + queue_size]:
+                if tile.heat != target_heat:
+                    updates[target_heat].append(tile.id)
             current_idx += queue_size
 
-        logger.debug(f"Rebuilt Zipf distribution: {self.num_queues} queues, {num_tiles} tiles")
+        if not updates:
+            logger.debug(f"Queues unchanged: {self.num_queues} queues, {len(temp_tiles)} tiles")
+            return
 
-    def retry_current_queue(self) -> None:
-        """Rewind round-robin index to retry current queue.
+        total_updated = 0
+        for target_heat, tile_ids in updates.items():
+            await TileInfo.filter(id__in=tile_ids).update(heat=target_heat)
+            total_updated += len(tile_ids)
 
-        Call this when a tile check fails and should be retried from the same
-        queue on the next check cycle.
-        """
-        self.current_queue_index = max(0, self.current_queue_index - 1)
+        logger.debug(f"Redistributed: {self.num_queues} queues, {len(temp_tiles)} tiles, {total_updated} updated")
+
+    async def _try_select(self) -> TileInfo | None:
+        """Advance the iterator, querying each queue for the least recently checked tile."""
+        for heat in self.queue_iterator:
+            tile_info = await TileInfo.filter(heat=heat).order_by("last_checked").first()
+            if tile_info:
+                logger.debug(f"Using queue heat={heat}")
+                return tile_info
+        return None

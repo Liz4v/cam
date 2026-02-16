@@ -38,7 +38,7 @@ def test_calculate_zipf_queue_sizes_exact_min():
 def test_calculate_zipf_queue_sizes_zero():
     """Test with zero tiles."""
     sizes = calculate_zipf_queue_sizes(0, min_hottest_size=5)
-    assert sizes == []
+    assert sizes == ()
 
 
 def test_calculate_zipf_queue_sizes_large():
@@ -73,9 +73,9 @@ async def _create_tile(
 
 
 def test_queue_system_initialization():
-    """Test QueueSystem starts with zeroed state."""
+    """Test QueueSystem starts with empty iterator and zero queues."""
     qs = QueueSystem()
-    assert qs.current_queue_index == 0
+    assert list(qs.queue_iterator) == []
     assert qs.num_queues == 0
 
 
@@ -112,7 +112,7 @@ async def test_select_next_tile_empty_database():
 
 
 async def test_select_next_tile_burning_only():
-    """Selects a tile from burning queue (temp=999)."""
+    """Selects a tile from burning queue (heat=999)."""
     await _create_tile(3, 7, heat=999, last_checked=0)
 
     qs = QueueSystem()
@@ -156,7 +156,7 @@ async def test_select_next_tile_least_recently_checked():
 
 
 async def test_select_next_tile_round_robin():
-    """Verifies round-robin cycling through burning + temperature queues."""
+    """Verifies iterator cycling through burning + temperature queues."""
     now = round(time.time())
     # One burning tile
     await _create_tile(0, 0, heat=999, last_checked=0)
@@ -180,101 +180,30 @@ async def test_select_next_tile_round_robin():
 
 
 async def test_select_next_tile_skips_empty_queue():
-    """When all queues are empty, tries each queue and returns None."""
+    """When all queues are empty, returns None after exhausting iterator."""
     qs = QueueSystem()
     qs.num_queues = 2
 
     # No tiles in DB at all - all queues empty
-    initial_index = qs.current_queue_index
     result = await qs.select_next_tile()
     assert result is None
-    # Should have advanced past all 3 queues (burning + 2 temp)
-    assert qs.current_queue_index == initial_index + 3
 
 
-# --- update_tile_after_check ---
+# --- redistribute_queues ---
 
 
-async def test_update_tile_after_check_persists():
-    """Persists pre-mutated tile_info fields to database."""
-    tile_info = await _create_tile(5, 5, heat=1, last_checked=100, last_update=50)
-
-    qs = QueueSystem()
-    await qs.start()
-
-    # Simulate has_tile_changed mutation
-    new_update = round(time.time())
-    tile_info.last_checked = new_update
-    tile_info.last_update = new_update
-    tile_info.etag = "etag-abc"
-
-    await qs.update_tile_after_check(tile_info)
-
-    await tile_info.refresh_from_db()
-    assert tile_info.last_update == new_update
-    assert tile_info.etag == "etag-abc"
-    assert tile_info.last_checked == new_update
-
-
-async def test_update_tile_after_check_burning_graduates():
-    """A burning tile (temp=999) triggers Zipf rebuild and graduates."""
-    # Create a burning tile and a temperature tile
-    burning_tile = await _create_tile(0, 0, heat=999, last_checked=0, last_update=0)
-    await _create_tile(1, 0, heat=1, last_checked=100, last_update=50)
-
-    qs = QueueSystem()
-    await qs.start()
-
-    # Simulate has_tile_changed mutation
-    now = round(time.time())
-    burning_tile.last_checked = now
-    burning_tile.last_update = now
-
-    await qs.update_tile_after_check(burning_tile)
-
-    # Tile should no longer be burning (temp should have changed from 999)
-    await burning_tile.refresh_from_db()
-    assert burning_tile.last_checked == now
-    # After rebuild, should be assigned a temperature 1..N (not 999 or 0)
-    assert burning_tile.heat != 999
-
-
-async def test_update_tile_after_check_non_burning_no_rebuild():
-    """A non-burning tile is persisted without Zipf rebuild."""
-    now = round(time.time())
-    tile_info = await _create_tile(0, 0, heat=1, last_checked=now - 500, last_update=now - 1000)
-
-    qs = QueueSystem()
-    await qs.start()
-    assert qs.num_queues == 1
-
-    # Simulate has_tile_changed mutation
-    tile_info.last_checked = now
-    tile_info.etag = "etag-1"
-
-    await qs.update_tile_after_check(tile_info)
-
-    # Temperature should remain unchanged (no rebuild for non-burning)
-    await tile_info.refresh_from_db()
-    assert tile_info.heat == 1
-    assert tile_info.last_checked == now
-
-
-# --- _rebuild_zipf_distribution ---
-
-
-async def test_rebuild_zipf_empty():
-    """Rebuild with no temperature tiles sets num_queues to 0."""
+async def test_redistribute_empty():
+    """Redistribute with no temperature tiles sets num_queues to 0."""
     qs = QueueSystem()
     qs.num_queues = 5  # stale value
 
-    await qs._rebuild_zipf_distribution()
+    await qs.redistribute_queues()
 
     assert qs.num_queues == 0
 
 
-async def test_rebuild_zipf_assigns_temperatures():
-    """Rebuild assigns temperature values based on last_update ordering."""
+async def test_redistribute_assigns_temperatures():
+    """Redistribute assigns temperature values based on last_update ordering."""
     now = round(time.time())
 
     # Create 20 temperature tiles with varying last_update
@@ -282,7 +211,7 @@ async def test_rebuild_zipf_assigns_temperatures():
         await _create_tile(i, 0, heat=1, last_checked=now - 100, last_update=now - i * 100)
 
     qs = QueueSystem()
-    await qs._rebuild_zipf_distribution()
+    await qs.redistribute_queues()
 
     assert qs.num_queues > 0
 
@@ -300,18 +229,18 @@ async def test_rebuild_zipf_assigns_temperatures():
     assert sum(queue_counts.values()) == 20
 
 
-async def test_rebuild_zipf_ignores_burning_and_inactive():
-    """Rebuild excludes burning (999) and inactive (0) tiles."""
+async def test_redistribute_ignores_unchecked_burning_and_inactive():
+    """Redistribute excludes unchecked burning (last_update=0) and inactive (heat=0) tiles."""
     now = round(time.time())
 
-    await _create_tile(0, 0, heat=999, last_checked=0, last_update=0)  # burning
+    await _create_tile(0, 0, heat=999, last_checked=0, last_update=0)  # unchecked burning
     await _create_tile(1, 0, heat=0, last_checked=0, last_update=0)  # inactive
     await _create_tile(2, 0, heat=1, last_checked=now, last_update=now)  # temperature
 
     qs = QueueSystem()
-    await qs._rebuild_zipf_distribution()
+    await qs.redistribute_queues()
 
-    # Burning tile should still be 999
+    # Unchecked burning tile should still be 999
     burning = await TileInfo.get(id=TileInfo.tile_id(0, 0))
     assert burning.heat == 999
 
@@ -324,7 +253,7 @@ async def test_rebuild_zipf_ignores_burning_and_inactive():
     assert 1 <= temp.heat <= qs.num_queues
 
 
-async def test_rebuild_zipf_hottest_tiles_get_highest_temperature():
+async def test_redistribute_hottest_tiles_get_highest_temperature():
     """Most recently updated tiles get the highest temperature (hottest queue)."""
     now = round(time.time())
 
@@ -337,7 +266,7 @@ async def test_rebuild_zipf_hottest_tiles_get_highest_temperature():
         await _create_tile(i, 0, heat=1, last_checked=now, last_update=now - i * 500)
 
     qs = QueueSystem()
-    await qs._rebuild_zipf_distribution()
+    await qs.redistribute_queues()
 
     if qs.num_queues > 1:
         # Newest tile should be in hottest queue (highest temperature)
@@ -349,64 +278,109 @@ async def test_rebuild_zipf_hottest_tiles_get_highest_temperature():
         assert oldest.heat <= newest.heat
 
 
-# --- retry_current_queue ---
+async def test_redistribute_optimistic_no_changes():
+    """Running redistribute twice with same state writes zero updates the second time."""
+    now = round(time.time())
 
-
-def test_retry_current_queue_rewinds_index():
-    """retry_current_queue decrements the round-robin index."""
-    qs = QueueSystem()
-    qs.current_queue_index = 3
-
-    qs.retry_current_queue()
-    assert qs.current_queue_index == 2
-
-
-def test_retry_current_queue_clamps_at_zero():
-    """retry_current_queue doesn't go below 0."""
-    qs = QueueSystem()
-    qs.current_queue_index = 0
-
-    qs.retry_current_queue()
-    assert qs.current_queue_index == 0
-
-
-async def test_retry_and_reselect_same_queue():
-    """After retry, next select hits the same queue again."""
-    await _create_tile(0, 0, heat=999, last_checked=0)
+    for i in range(10):
+        await _create_tile(i, 0, heat=1, last_checked=now, last_update=now - i * 100)
 
     qs = QueueSystem()
+    await qs.redistribute_queues()
 
-    # Select from burning queue
-    tile_info = await qs.select_next_tile()
-    assert tile_info is not None
-    assert (tile_info.x, tile_info.y) == (0, 0)
-    index_after_select = qs.current_queue_index
+    # Capture heat values after first redistribute
+    tiles_before = {t.id: t.heat for t in await TileInfo.all()}
 
-    # Retry
-    qs.retry_current_queue()
-    assert qs.current_queue_index == index_after_select - 1
+    # Second redistribute should be a no-op (optimistic fast path)
+    await qs.redistribute_queues()
 
-    # Select again - should hit same queue
-    tile_info2 = await qs.select_next_tile()
-    assert tile_info2 is not None
-    assert (tile_info2.x, tile_info2.y) == (0, 0)
-    assert qs.current_queue_index == index_after_select
+    # All heats should be identical
+    tiles_after = {t.id: t.heat for t in await TileInfo.all()}
+    assert tiles_before == tiles_after
+
+
+async def test_redistribute_graduates_checked_burning_tile():
+    """Burning tiles with last_update > 0 are included in redistribution."""
+    now = round(time.time())
+
+    # Burning tile that has been checked (has last_update)
+    burning = await _create_tile(0, 0, heat=999, last_checked=now, last_update=now)
+
+    # Some temperature tiles
+    for i in range(1, 10):
+        await _create_tile(i, 0, heat=1, last_checked=now, last_update=now - i * 100)
+
+    qs = QueueSystem()
+    await qs.redistribute_queues()
+
+    # Burning tile should be graduated to hottest queue (most recent last_update)
+    await burning.refresh_from_db()
+    assert burning.heat != 999
+    assert burning.heat == qs.num_queues
+
+
+# --- Iterator behavior ---
+
+
+async def test_iterator_exhaustion_triggers_redistribute():
+    """When iterator exhausts, redistribution runs and a new cycle starts."""
+    now = round(time.time())
+    for i in range(5):
+        await _create_tile(i, 0, heat=1, last_checked=now - 100, last_update=now - i * 100)
+
+    qs = QueueSystem()
+    await qs.start()
+
+    # Exhaust the iterator: burning (empty) + num_queues temperature queues
+    # Each select_next_tile call that returns a tile advances by 1
+    # After all queues exhausted, next call triggers redistribute + new cycle
+    selected_count = 0
+    for _ in range(20):
+        tile = await qs.select_next_tile()
+        if tile:
+            selected_count += 1
+
+    # Should have selected tiles across multiple cycles
+    assert selected_count >= 5
+
+
+async def test_full_cycle_with_iterator():
+    """Multiple complete iterator cycles selecting tiles."""
+    now = round(time.time())
+    for i in range(10):
+        await _create_tile(i, 0, heat=1, last_checked=now - 1000 + i, last_update=now - i * 100)
+
+    qs = QueueSystem()
+    await qs.start()
+
+    tiles_seen = set()
+    for t in range(50):
+        tile = await qs.select_next_tile()
+        if tile:
+            tiles_seen.add(tile.id)
+            # Simulate real usage: update last_checked so LRU rotates
+            tile.last_checked = now + t
+            await tile.save()
+
+    # Should have seen all 10 tiles across cycles
+    assert len(tiles_seen) == 10
 
 
 # --- Integration: full check cycle ---
 
 
 async def test_full_check_cycle_burning_to_temperature():
-    """End-to-end: select burning tile, check it, verify it gets a temperature."""
-    # Create several burning tiles
+    """End-to-end: burning tile stays burning until iterator cycle triggers redistribute."""
     for i in range(8):
         await _create_tile(i, 0, heat=999, last_checked=0, last_update=0)
 
     qs = QueueSystem()
+    await qs.start()
 
-    # Select and check first tile
+    # Select and check first burning tile
     tile_info = await qs.select_next_tile()
     assert tile_info is not None
+    assert tile_info.heat == 999
 
     # Simulate has_tile_changed mutation
     now = round(time.time())
@@ -414,54 +388,60 @@ async def test_full_check_cycle_burning_to_temperature():
     tile_info.last_update = now
     tile_info.etag = "etag-1"
 
-    await qs.update_tile_after_check(tile_info)
+    await tile_info.save()
 
-    # Tile should now be in a temperature queue
+    # Tile should still be burning (deferred graduation)
     await tile_info.refresh_from_db()
-    assert tile_info.last_checked == now
-    assert tile_info.heat != 999
+    assert tile_info.heat == 999
+    assert tile_info.last_update == now
 
-    # Remaining tiles should still be burning
-    burning_count = await TileInfo.filter(heat=999).count()
-    assert burning_count == 7
+    # Exhaust iterator to trigger redistribute
+    for _ in range(20):
+        await qs.select_next_tile()
+
+    # After redistribute, checked burning tile should be graduated
+    await tile_info.refresh_from_db()
+    assert tile_info.heat != 999
+    assert 1 <= tile_info.heat <= qs.num_queues
 
 
 async def test_full_check_cycle_multiple_graduates():
-    """Multiple burning tiles graduating builds up temperature queues."""
+    """Multiple burning tiles graduating via deferred redistribution."""
     for i in range(10):
         await _create_tile(i, 0, heat=999, last_checked=0, last_update=0)
 
     qs = QueueSystem()
     now = round(time.time())
 
-    # Run enough iterations to graduate several tiles (round-robin alternates queues)
-    graduated = 0
-    for iteration in range(20):
+    # Check several burning tiles (they stay heat=999 but get last_update > 0)
+    checked = 0
+    for iteration in range(30):
         tile_info = await qs.select_next_tile()
         if tile_info is None:
             continue
 
-        if tile_info.heat == 999:
+        if tile_info.heat == 999 and tile_info.last_update == 0:
             # Simulate has_tile_changed mutation
             tile_info.last_checked = now
             tile_info.last_update = now - iteration * 100
             tile_info.etag = f"etag-{iteration}"
-            await qs.update_tile_after_check(tile_info)
-            graduated += 1
+            await tile_info.save()
+            checked += 1
 
-    # Should have graduated some tiles into temperature queues
+    assert checked > 0
+
+    # After cycles complete, checked tiles should have graduated
+    graduated = await TileInfo.filter(heat__gte=1, heat__lte=998).count()
+    still_burning = await TileInfo.filter(heat=999).count()
+    assert graduated + still_burning == 10
     assert graduated > 0
-    burning = await TileInfo.filter(heat=999).count()
-    temp = await TileInfo.filter(heat__gte=1, heat__lte=998).count()
-    assert burning + temp == 10
-    assert temp == graduated
     assert qs.num_queues >= 1
 
 
 async def test_no_starvation_with_large_burning_queue():
     """Temperature queues get selected even when burning queue is large.
 
-    Verifies round-robin behavior prevents burning queue from monopolizing.
+    Verifies iterator behavior prevents burning queue from monopolizing.
     """
     now = round(time.time())
 

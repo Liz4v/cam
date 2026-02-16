@@ -71,9 +71,7 @@ class TileChecker:
 
         # Check tile (mutates tile_info fields: last_checked, last_update, etag)
         changed = await self.has_tile_changed(tile_info)
-
-        # Persist tile_info updates and handle burning→temperature graduation
-        await self.queue_system.update_tile_after_check(tile_info)
+        await tile_info.save()
 
         # Query affected projects from database
         projects = await self._get_projects_for_tile(tile_info)
