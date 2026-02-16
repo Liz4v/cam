@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pixel-hawk = "pixel_hawk.main:main"
+hawk = "pixel_hawk.main:main"
 
 [tool.ruff]
 line-length = 120
