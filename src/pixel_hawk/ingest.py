@@ -31,78 +31,6 @@ if TYPE_CHECKING:
     from .projects import Project
 
 
-async def has_tile_changed(tile: Tile, client: httpx.AsyncClient, tile_info: TileInfo) -> tuple[bool, int, str]:
-    """Downloads the indicated tile from the server and updates the cache.
-
-    Args:
-        tile: The tile to check
-        client: HTTP client
-        tile_info: TileInfo with cached last_update and http_etag for conditional requests
-
-    Returns:
-        Tuple of (changed, new_last_update, new_http_etag):
-        - changed: True if tile was modified, False if 304 Not Modified or error
-        - new_last_update: Parsed timestamp from Last-Modified header, or current time if absent
-        - new_http_etag: ETag header value from response
-
-    Returns unchanged values on error (changed=False, existing values preserved).
-    """
-    url = f"https://backend.wplace.live/files/s0/tiles/{tile.x}/{tile.y}.png"
-    cache_path = get_config().tiles_dir / f"tile-{tile}.png"
-
-    # Build conditional request headers from TileInfo
-    request_headers = {}
-
-    # Add If-Modified-Since from tile_info.last_update
-    if tile_info.last_update > 0:
-        request_headers["If-Modified-Since"] = formatdate(tile_info.last_update, usegmt=True)
-
-    # Add If-None-Match from tile_info.http_etag
-    if tile_info.http_etag:
-        request_headers["If-None-Match"] = tile_info.http_etag
-
-    try:
-        response = await client.get(url, headers=request_headers)
-    except Exception as e:
-        logger.debug(f"Tile {tile}: Request failed: {e}")
-        return False, tile_info.last_update, tile_info.http_etag  # Return unchanged on error
-
-    # Handle 304 Not Modified (server validated our cache)
-    if response.status_code == 304:
-        # Cache is valid, return existing values
-        return False, tile_info.last_update, tile_info.http_etag
-
-    if response.status_code != 200:
-        logger.debug(f"Tile {tile}: HTTP {response.status_code}")
-        return False, tile_info.last_update, tile_info.http_etag  # Return unchanged on error
-
-    data = response.content
-
-    # Parse Last-Modified header
-    last_modified_str = response.headers.get("Last-Modified", "")
-    if last_modified_str:
-        try:
-            new_last_update = round(parsedate_to_datetime(last_modified_str).timestamp())
-        except Exception:
-            new_last_update = round(time.time())
-    else:
-        new_last_update = round(time.time())
-
-    # Extract ETag
-    new_http_etag = response.headers.get("ETag", "")
-
-    # Save PNG to cache (NO mtime manipulation)
-    try:
-        async with PALETTE.aopen_bytes(data) as img:
-            logger.info(f"Tile {tile}: Change detected, updating cache...")
-            await asyncio.to_thread(img.save, cache_path)
-    except (UnidentifiedImageError, ColorsNotInPalette) as e:
-        logger.debug(f"Tile {tile}: image decode failed: {e}")
-        return False, tile_info.last_update, tile_info.http_etag  # Return unchanged on error
-
-    return True, new_last_update, new_http_etag
-
-
 async def stitch_tiles(rect: Rectangle) -> Image.Image:
     """Stitches tiles from cache together, exactly covering the given rectangle."""
     image = PALETTE.new(rect.size)
@@ -159,21 +87,81 @@ class TileChecker:
 
         tile = Tile(x=tile_info.tile_x, y=tile_info.tile_y)
 
-        # Check tile with ETag support
-        changed, new_last_update, new_http_etag = await has_tile_changed(tile, self.client, tile_info)
+        # Check tile (mutates tile_info fields: last_checked, last_update, http_etag)
+        changed = await self.has_tile_changed(tile_info)
 
-        # Update tile in database
-        await self.queue_system.update_tile_after_check(tile_info, new_last_update, new_http_etag)
+        # Persist tile_info updates and handle burning→temperature graduation
+        await self.queue_system.update_tile_after_check(tile_info)
 
         # Diff against affected projects
         if changed:
             for proj in self.tiles.get(tile) or ():
                 await proj.run_diff(changed_tile=tile)
         else:
-            untouched = tile_info.last_update - tile_info.last_checked
+            untouched = tile_info.last_checked - tile_info.last_update
             logger.debug(f"Tile {tile}: Unchanged for {untouched}s ({naturaldelta(untouched)})")
             for proj in self.tiles.get(tile) or ():
                 await proj.run_nochange()
+
+    async def has_tile_changed(self, tile_info: TileInfo) -> bool:
+        """Downloads the indicated tile from the server and updates the cache.
+
+        Mutates tile_info fields directly: last_checked is always updated,
+        last_update and http_etag are updated on successful 200 responses.
+
+        Args:
+            tile_info: TileInfo to check and update in place
+
+        Returns:
+            True if tile was modified, False if 304 Not Modified or error.
+        """
+        tile = Tile(tile_info.tile_x, tile_info.tile_y)
+        url = f"https://backend.wplace.live/files/s0/tiles/{tile.x}/{tile.y}.png"
+        cache_path = get_config().tiles_dir / f"tile-{tile}.png"
+
+        # Build conditional request headers from TileInfo
+        request_headers = {}
+        if tile_info.last_update > 0:
+            request_headers["If-Modified-Since"] = formatdate(tile_info.last_update, usegmt=True)
+        if tile_info.http_etag:
+            request_headers["If-None-Match"] = tile_info.http_etag
+
+        tile_info.last_checked = now = round(time.time())
+        try:
+            response = await self.client.get(url, headers=request_headers)
+        except Exception as e:
+            logger.debug(f"Tile {tile}: Request failed: {e}")
+            return False
+
+        if response.status_code == 304:
+            return False
+
+        if response.status_code != 200:
+            logger.debug(f"Tile {tile}: HTTP {response.status_code}")
+            return False
+
+        # Save response headers
+        tile_info.http_etag = response.headers.get("ETag", "")
+        last_modified_str = response.headers.get("Last-Modified", "")
+        if last_modified_str:
+            try:
+                tile_info.last_update = round(parsedate_to_datetime(last_modified_str).timestamp())
+            except Exception:
+                tile_info.last_update = now
+        else:
+            tile_info.last_update = now
+
+        # Save response body
+        data = response.content
+        try:
+            async with PALETTE.aopen_bytes(data) as img:
+                logger.info(f"Tile {tile}: Change detected, updating cache...")
+                await asyncio.to_thread(img.save, cache_path)
+        except (UnidentifiedImageError, ColorsNotInPalette) as e:
+            logger.debug(f"Tile {tile}: image decode failed: {e}")
+            return False
+
+        return True
 
     async def close(self) -> None:
         """Close the httpx client."""

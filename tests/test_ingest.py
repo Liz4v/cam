@@ -1,13 +1,12 @@
 """Tests for tile fetching, caching, and conditional requests."""
 
 import io
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 
 from pixel_hawk.geometry import Point, Rectangle, Size, Tile
-from pixel_hawk.ingest import TileChecker, has_tile_changed, stitch_tiles
+from pixel_hawk.ingest import TileChecker, stitch_tiles
 from pixel_hawk.models import TileInfo
 from pixel_hawk.palette import PALETTE
 
@@ -54,121 +53,134 @@ async def _create_tile_info(x: int, y: int, *, last_update: int = 0, http_etag: 
 # --- has_tile_changed ---
 
 
+def _checker_with_client(client: MockClient) -> TileChecker:
+    """Create a TileChecker with no projects and inject a mock client."""
+    checker = TileChecker([])
+    checker.client = client
+    return checker
+
+
 async def test_has_tile_changed_http_error():
     tile_info = await _create_tile_info(0, 0)
-    client = MockClient(httpx.Response(404))
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert not changed
-    assert last_update == 0
-    assert etag == ""
+    checker = _checker_with_client(MockClient(httpx.Response(404)))
+    assert not await checker.has_tile_changed(tile_info)
+    assert tile_info.last_update == 0  # Unchanged on error
+    assert tile_info.http_etag == ""
+    assert tile_info.last_checked > 0  # Always updated
+    await checker.close()
 
 
 async def test_has_tile_changed_bad_image():
     tile_info = await _create_tile_info(0, 0)
-    client = MockClient(
+    checker = _checker_with_client(MockClient(
         httpx.Response(200, content=b"not an image", headers={"Last-Modified": "Wed, 15 Nov 2023 12:45:26 GMT"})
-    )
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert not changed
-    assert last_update == 0  # Returns tile_info's existing value on error
-    assert etag == ""
+    ))
+    assert not await checker.has_tile_changed(tile_info)
+    # last_update/http_etag are mutated before decode, so they reflect the 200 response
+    assert tile_info.last_update == 1700052326
+    assert tile_info.http_etag == ""
+    await checker.close()
 
 
 async def test_has_tile_changed_network_exception():
-    """Network exceptions are caught and return unchanged values."""
+    """Network exceptions are caught and preserve existing values."""
     tile_info = await _create_tile_info(0, 0, last_update=500, http_etag="old-etag")
 
     async def raise_exception(url, **kwargs):
         raise ConnectionError("Network unavailable")
 
-    client = MockClient(handler=raise_exception)
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert not changed
-    assert last_update == 500  # Preserves existing value
-    assert etag == "old-etag"
+    checker = _checker_with_client(MockClient(handler=raise_exception))
+    assert not await checker.has_tile_changed(tile_info)
+    assert tile_info.last_update == 500  # Preserved
+    assert tile_info.http_etag == "old-etag"  # Preserved
+    await checker.close()
 
 
 async def test_has_tile_changed_success_with_last_modified(setup_config):
     png = _paletted_png_bytes()
     tile_info = await _create_tile_info(0, 0)
-    client = MockClient(httpx.Response(200, content=png, headers={"Last-Modified": "Wed, 15 Nov 2023 12:45:26 GMT"}))
+    checker = _checker_with_client(MockClient(httpx.Response(200, content=png, headers={"Last-Modified": "Wed, 15 Nov 2023 12:45:26 GMT"})))
 
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert changed
-    assert last_update == 1700052326
+    assert await checker.has_tile_changed(tile_info)
+    assert tile_info.last_update == 1700052326
+    assert tile_info.last_checked > 0
     assert setup_config.tiles_dir.joinpath("tile-0_0.png").exists()
+    await checker.close()
 
 
 async def test_has_tile_changed_missing_last_modified(setup_config):
     """Missing Last-Modified header falls back to current time."""
     png = _paletted_png_bytes()
     tile_info = await _create_tile_info(0, 0)
-    client = MockClient(httpx.Response(200, content=png, headers={}))
+    checker = _checker_with_client(MockClient(httpx.Response(200, content=png, headers={})))
 
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert changed
-    assert last_update > 0  # Fallback to current time
+    assert await checker.has_tile_changed(tile_info)
+    assert tile_info.last_update > 0  # Fallback to current time
+    await checker.close()
 
 
 async def test_has_tile_changed_invalid_last_modified(setup_config):
     """Invalid Last-Modified header falls back to current time."""
     png = _paletted_png_bytes()
     tile_info = await _create_tile_info(0, 0)
-    client = MockClient(httpx.Response(200, content=png, headers={"Last-Modified": "invalid-date-format"}))
+    checker = _checker_with_client(MockClient(httpx.Response(200, content=png, headers={"Last-Modified": "invalid-date-format"})))
 
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert changed
-    assert last_update > 0  # Fallback to current time
+    assert await checker.has_tile_changed(tile_info)
+    assert tile_info.last_update > 0  # Fallback to current time
+    await checker.close()
 
 
 async def test_has_tile_changed_returns_etag(setup_config):
-    """ETag from response is returned."""
+    """ETag from response is stored on tile_info."""
     png = _paletted_png_bytes()
     tile_info = await _create_tile_info(0, 0)
-    client = MockClient(httpx.Response(200, content=png, headers={
+    checker = _checker_with_client(MockClient(httpx.Response(200, content=png, headers={
         "Last-Modified": "Wed, 15 Nov 2023 12:45:26 GMT",
         "ETag": '"abc123"',
-    }))
+    })))
 
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert changed
-    assert etag == '"abc123"'
+    assert await checker.has_tile_changed(tile_info)
+    assert tile_info.http_etag == '"abc123"'
+    await checker.close()
 
 
 async def test_has_tile_changed_304_not_modified():
-    """304 returns (False, existing_last_update, existing_etag)."""
+    """304 preserves existing tile_info values."""
     tile_info = await _create_tile_info(0, 0, last_update=1700052326, http_etag='"old"')
-    client = MockClient(httpx.Response(304))
+    checker = _checker_with_client(MockClient(httpx.Response(304)))
 
-    changed, last_update, etag = await has_tile_changed(Tile(0, 0), client, tile_info)
-    assert not changed
-    assert last_update == 1700052326  # Preserves existing
-    assert etag == '"old"'
+    assert not await checker.has_tile_changed(tile_info)
+    assert tile_info.last_update == 1700052326  # Preserved
+    assert tile_info.http_etag == '"old"'  # Preserved
+    await checker.close()
 
 
 async def test_has_tile_changed_sends_if_modified_since():
     """If-Modified-Since header is sent when tile_info has last_update."""
-    png = _paletted_png_bytes()
     tile_info = await _create_tile_info(0, 0, last_update=1700052326)
     client = MockClient(httpx.Response(304))
+    checker = _checker_with_client(client)
 
-    await has_tile_changed(Tile(0, 0), client, tile_info)
+    await checker.has_tile_changed(tile_info)
 
     assert len(client.calls) == 1
     headers = client.calls[0][1].get("headers", {})
     assert "If-Modified-Since" in headers
+    await checker.close()
 
 
 async def test_has_tile_changed_sends_if_none_match():
     """If-None-Match header is sent when tile_info has http_etag."""
     tile_info = await _create_tile_info(0, 0, http_etag='"abc"')
     client = MockClient(httpx.Response(304))
+    checker = _checker_with_client(client)
 
-    await has_tile_changed(Tile(0, 0), client, tile_info)
+    await checker.has_tile_changed(tile_info)
 
     assert len(client.calls) == 1
     headers = client.calls[0][1].get("headers", {})
     assert headers.get("If-None-Match") == '"abc"'
+    await checker.close()
 
 
 async def test_has_tile_changed_no_conditional_headers_when_fresh():
@@ -176,12 +188,14 @@ async def test_has_tile_changed_no_conditional_headers_when_fresh():
     png = _paletted_png_bytes()
     tile_info = await _create_tile_info(0, 0)  # last_update=0, http_etag=""
     client = MockClient(httpx.Response(200, content=png, headers={"Last-Modified": "Wed, 15 Nov 2023 12:45:26 GMT"}))
+    checker = _checker_with_client(client)
 
-    await has_tile_changed(Tile(0, 0), client, tile_info)
+    await checker.has_tile_changed(tile_info)
 
     headers = client.calls[0][1].get("headers", {})
     assert "If-Modified-Since" not in headers
     assert "If-None-Match" not in headers
+    await checker.close()
 
 
 # --- stitch_tiles ---

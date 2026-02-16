@@ -2,7 +2,7 @@
 
 Implements intelligent tile checking using database-backed temperature queues:
 - Burning queue (temp=999): tiles that have never been checked (last_checked=0)
-- Temperature queues (temp=1-998): hot to cold, based on last_update timestamp
+- Temperature queues (temp=1-998): higher temp = hotter (more recently updated)
 - Inactive (temp=0): tiles with no active projects
 
 Queue sizes follow Zipf distribution (harmonic series), with the hottest queue
@@ -13,8 +13,6 @@ within each queue.
 This module is query-driven: no tile metadata is loaded into memory. The database
 is the single source of truth for all tile state.
 """
-
-import time
 
 from loguru import logger
 
@@ -105,8 +103,8 @@ class QueueSystem:
     memory - the database is the single source of truth.
 
     Maintains a burning queue (temp=999) for never-checked tiles and multiple
-    temperature queues (temp=1 to num_queues) from hot to cold. Selects tiles
-    round-robin between queues.
+    temperature queues (temp=1 to num_queues) where higher temp = hotter.
+    Selects tiles round-robin: burning, then hottest to coldest.
     """
 
     def __init__(self):
@@ -129,8 +127,8 @@ class QueueSystem:
         """
 
         # Determine current queue temperature (999 for burning, or 1 to num_queues)
-        # Round-robin cycles through: burning (999), temp 1, temp 2, ..., temp N
-        queue_temperatures = [999] + list(range(1, self.num_queues + 1))
+        # Round-robin cycles through: burning (999), then hottest (N) down to coldest (1)
+        queue_temperatures = [999] + list(range(self.num_queues, 0, -1))
         total_queues = len(queue_temperatures)
 
         # Try each queue starting from current position; skip empty queues
@@ -144,25 +142,21 @@ class QueueSystem:
             self.current_queue_index += 1
 
             if tile_info:
+                logger.debug(f"Using queue temp={current_temp}")
                 return tile_info
 
         return None
 
-    async def update_tile_after_check(self, tile_info: TileInfo, new_last_update: int, http_etag: str) -> None:
-        """Update tile in database after checking.
+    async def update_tile_after_check(self, tile_info: TileInfo) -> None:
+        """Persist tile_info to database and handle burning→temperature graduation.
+
+        Assumes tile_info fields (last_checked, last_update, http_etag) have
+        already been updated by the caller (has_tile_changed).
 
         Args:
-            tile_info: The TileInfo that was checked (as returned by select_next_tile)
-            new_last_update: Parsed Last-Modified timestamp or current time
-            http_etag: ETag header value from response
+            tile_info: The TileInfo with updated fields to persist
         """
-        now = round(time.time())
-        was_burning = tile_info.last_checked == 0
-
-        # Update timestamps and ETag
-        tile_info.last_checked = now
-        tile_info.last_update = new_last_update
-        tile_info.http_etag = http_etag
+        was_burning = tile_info.queue_temperature == 999
 
         # Graduate from burning queue into temperature pool
         if was_burning:
@@ -206,8 +200,8 @@ class QueueSystem:
             tiles_in_queue = temp_tiles[current_idx : current_idx + queue_size]
             tile_ids = [t.id for t in tiles_in_queue]
 
-            # Bulk update temperature assignment (temp 1 = hottest)
-            await TileInfo.filter(id__in=tile_ids).update(queue_temperature=temp_idx + 1)
+            # Bulk update: hottest tiles (temp_idx=0) get highest temperature number
+            await TileInfo.filter(id__in=tile_ids).update(queue_temperature=self.num_queues - temp_idx)
 
             current_idx += queue_size
 

@@ -194,24 +194,29 @@ async def test_select_next_tile_skips_empty_queue():
 # --- update_tile_after_check ---
 
 
-async def test_update_tile_after_check_timestamps():
-    """Updates last_checked, last_update, and http_etag."""
+async def test_update_tile_after_check_persists():
+    """Persists pre-mutated tile_info fields to database."""
     tile_info = await _create_tile(5, 5, queue_temperature=1, last_checked=100, last_update=50)
 
     qs = QueueSystem()
     await qs.start()
 
+    # Simulate has_tile_changed mutation
     new_update = round(time.time())
-    await qs.update_tile_after_check(tile_info, new_update, "etag-abc")
+    tile_info.last_checked = new_update
+    tile_info.last_update = new_update
+    tile_info.http_etag = "etag-abc"
+
+    await qs.update_tile_after_check(tile_info)
 
     await tile_info.refresh_from_db()
     assert tile_info.last_update == new_update
     assert tile_info.http_etag == "etag-abc"
-    assert tile_info.last_checked > 100
+    assert tile_info.last_checked == new_update
 
 
 async def test_update_tile_after_check_burning_graduates():
-    """Checking a burning tile (last_checked=0) triggers Zipf rebuild."""
+    """A burning tile (temp=999) triggers Zipf rebuild and graduates."""
     # Create a burning tile and a temperature tile
     burning_tile = await _create_tile(0, 0, queue_temperature=999, last_checked=0, last_update=0)
     await _create_tile(1, 0, queue_temperature=1, last_checked=100, last_update=50)
@@ -219,18 +224,22 @@ async def test_update_tile_after_check_burning_graduates():
     qs = QueueSystem()
     await qs.start()
 
+    # Simulate has_tile_changed mutation
     now = round(time.time())
-    await qs.update_tile_after_check(burning_tile, now, "")
+    burning_tile.last_checked = now
+    burning_tile.last_update = now
+
+    await qs.update_tile_after_check(burning_tile)
 
     # Tile should no longer be burning (temp should have changed from 999)
     await burning_tile.refresh_from_db()
-    assert burning_tile.last_checked > 0
+    assert burning_tile.last_checked == now
     # After rebuild, should be assigned a temperature 1..N (not 999 or 0)
     assert burning_tile.queue_temperature != 999
 
 
 async def test_update_tile_after_check_non_burning_no_rebuild():
-    """Checking a non-burning tile updates timestamps but doesn't rebuild Zipf."""
+    """A non-burning tile is persisted without Zipf rebuild."""
     now = round(time.time())
     tile_info = await _create_tile(0, 0, queue_temperature=1, last_checked=now - 500, last_update=now - 1000)
 
@@ -238,12 +247,16 @@ async def test_update_tile_after_check_non_burning_no_rebuild():
     await qs.start()
     assert qs.num_queues == 1
 
-    await qs.update_tile_after_check(tile_info, now, "etag-1")
+    # Simulate has_tile_changed mutation
+    tile_info.last_checked = now
+    tile_info.http_etag = "etag-1"
+
+    await qs.update_tile_after_check(tile_info)
 
     # Temperature should remain unchanged (no rebuild for non-burning)
     await tile_info.refresh_from_db()
     assert tile_info.queue_temperature == 1
-    assert tile_info.last_checked > now - 500
+    assert tile_info.last_checked == now
 
 
 # --- _rebuild_zipf_distribution ---
@@ -310,8 +323,8 @@ async def test_rebuild_zipf_ignores_burning_and_inactive():
     assert 1 <= temp.queue_temperature <= qs.num_queues
 
 
-async def test_rebuild_zipf_hottest_tiles_get_lowest_temperature():
-    """Most recently updated tiles get temperature=1 (hottest queue)."""
+async def test_rebuild_zipf_hottest_tiles_get_highest_temperature():
+    """Most recently updated tiles get the highest temperature (hottest queue)."""
     now = round(time.time())
 
     # Create tiles: newest first
@@ -326,13 +339,13 @@ async def test_rebuild_zipf_hottest_tiles_get_lowest_temperature():
     await qs._rebuild_zipf_distribution()
 
     if qs.num_queues > 1:
-        # Newest tile should be in hottest queue (temp=1)
+        # Newest tile should be in hottest queue (highest temperature)
         newest = await TileInfo.get(id=TileInfo.tile_id(0, 0))
-        assert newest.queue_temperature == 1
+        assert newest.queue_temperature == qs.num_queues
 
-        # Oldest tile should be in a colder queue
+        # Oldest tile should be in a colder queue (lower temperature)
         oldest = await TileInfo.get(id=TileInfo.tile_id(1, 0))
-        assert oldest.queue_temperature >= newest.queue_temperature
+        assert oldest.queue_temperature <= newest.queue_temperature
 
 
 # --- retry_current_queue ---
@@ -394,12 +407,17 @@ async def test_full_check_cycle_burning_to_temperature():
     tile_info = await qs.select_next_tile()
     assert tile_info is not None
 
+    # Simulate has_tile_changed mutation
     now = round(time.time())
-    await qs.update_tile_after_check(tile_info, now, "etag-1")
+    tile_info.last_checked = now
+    tile_info.last_update = now
+    tile_info.http_etag = "etag-1"
+
+    await qs.update_tile_after_check(tile_info)
 
     # Tile should now be in a temperature queue
     await tile_info.refresh_from_db()
-    assert tile_info.last_checked > 0
+    assert tile_info.last_checked == now
     assert tile_info.queue_temperature != 999
 
     # Remaining tiles should still be burning
@@ -423,7 +441,11 @@ async def test_full_check_cycle_multiple_graduates():
             continue
 
         if tile_info.queue_temperature == 999:
-            await qs.update_tile_after_check(tile_info, now - iteration * 100, f"etag-{iteration}")
+            # Simulate has_tile_changed mutation
+            tile_info.last_checked = now
+            tile_info.last_update = now - iteration * 100
+            tile_info.http_etag = f"etag-{iteration}"
+            await qs.update_tile_after_check(tile_info)
             graduated += 1
 
     # Should have graduated some tiles into temperature queues
