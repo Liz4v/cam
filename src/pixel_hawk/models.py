@@ -37,6 +37,7 @@ class ProjectState(IntEnum):
 class BotAccess(IntFlag):
     """Bitmask for bot-level access control on a Person."""
 
+    ALLOWED = 0x100
     ADMIN = 0x10000000
 
 

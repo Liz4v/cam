@@ -43,6 +43,10 @@ Add memory profiling to identify and optimize memory usage for deployment on mem
 
 > **Note:** Keep completed task descriptions to a single concise paragraph summarizing what was done.
 
+### ✅ Discord bot foundation with admin access command (2026-02-16)
+
+Added optional Discord bot integration: `config.toml` at nest root for bot credentials, `BotAccess(IntFlag)` enum with `ADMIN = 0x10000000`, `discord_id` and `access` fields on `Person`, and `/hawk admin-me <uuid>` slash command that grants admin access using a UUID4 token generated fresh each startup (stored in `nest/data/admin-me.txt`). Bot runs alongside the polling loop as a background task and is silently skipped when no token is configured. Removed unique constraint from `Person.name` since Discord identity is now the primary lookup key.
+
 ### ✅ Query-driven project lookups via TileProject table (2026-02-16)
 
 Replaced in-memory tile-to-project mapping with on-demand database queries through the `TileProject` junction table: `_get_projects_for_tile()` queries active/passive projects per tile, `Project` objects constructed on demand for each diff cycle, and all project-loading logic removed from startup. PASSIVE projects now correctly receive diffs. Includes tests for state filtering and database-driven lookups.

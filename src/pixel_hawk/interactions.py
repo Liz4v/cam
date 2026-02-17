@@ -34,7 +34,7 @@ def generate_admin_token() -> str:
     """
     path = get_config().data_dir / "admin-me.txt"
     token = str(uuid.uuid4())
-    path.write_text(token)
+    path.write_text(f"/hawk sa admin-me {token}")
     return token
 
 
@@ -71,21 +71,26 @@ class HawkBot(discord.Client):
     def _register_commands(self) -> None:
         """Register all slash commands under the /hawk group."""
         hawk_group = app_commands.Group(name="hawk", description="Pixel Hawk commands")
+        hawk_group.command(name="sa", description="Admin commands")(self._sa)
+        self.tree.add_command(hawk_group)
 
-        @hawk_group.command(name="admin-me", description="Claim admin access with the startup token")
-        @app_commands.describe(token="The UUID4 token from admin-me.txt")
-        async def admin_me(interaction: discord.Interaction, token: str):
-            result = await grant_admin(interaction.user.id, interaction.user.name, token, self.admin_token)
+    @app_commands.describe(args="Subcommand and arguments")
+    async def _sa(self, interaction: discord.Interaction, args: str) -> None:
+        """Dispatch /hawk sa subcommands."""
+        parts = args.split()
+        if len(parts) >= 2 and parts[0] == "admin-me":
+            result = await grant_admin(interaction.user.id, interaction.user.name, parts[1], self.admin_token)
             if result is None:
                 await interaction.response.send_message("Invalid token.", ephemeral=True)
                 return
             await interaction.response.send_message(result, ephemeral=True)
-
-        self.tree.add_command(hawk_group)
+        else:
+            await interaction.response.send_message("Unknown command.", ephemeral=True)
 
     async def setup_hook(self) -> None:
         """Sync command tree with Discord on ready."""
-        await self.tree.sync()
+        synced = await self.tree.sync()
+        logger.debug(f"Discord bot command tree synced: {synced}")
         logger.info("Discord bot command tree synced")
 
     async def on_ready(self) -> None:

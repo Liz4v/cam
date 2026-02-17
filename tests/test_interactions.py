@@ -82,7 +82,7 @@ class TestGenerateAdminToken:
         token = generate_admin_token()
         path = get_config().data_dir / "admin-me.txt"
         assert path.exists()
-        assert path.read_text() == token
+        assert token in path.read_text()
 
     def test_returns_valid_uuid4(self, setup_config):
         token = generate_admin_token()
@@ -95,7 +95,7 @@ class TestGenerateAdminToken:
         assert token1 != token2
         # File should contain the latest token
         path = get_config().data_dir / "admin-me.txt"
-        assert path.read_text() == token2
+        assert token2 in path.read_text()
 
 
 # grant_admin tests
