@@ -78,14 +78,17 @@ class HawkBot(discord.Client):
     async def _sa(self, interaction: discord.Interaction, args: str) -> None:
         """Dispatch /hawk sa subcommands."""
         parts = args.split()
-        if len(parts) >= 2 and parts[0] == "admin-me":
-            result = await grant_admin(interaction.user.id, interaction.user.name, parts[1], self.admin_token)
-            if result is None:
-                await interaction.response.send_message("Invalid token.", ephemeral=True)
-                return
-            await interaction.response.send_message(result, ephemeral=True)
+        if not parts:
+            await interaction.response.send_message("No.", ephemeral=True)
+            return
+        cmd, *params = parts
+        user = interaction.user
+        if cmd == "myself" and len(params) == 1:
+            msg = await grant_admin(user.id, user.name, params[0], self.admin_token)
+            await interaction.response.send_message(msg or "No.", ephemeral=True)
         else:
-            await interaction.response.send_message("Unknown command.", ephemeral=True)
+            logger.debug(f"Failed sa dispatch from {user.name} https://discord.com/users/{user.id}")
+            await interaction.response.send_message("No.", ephemeral=True)
 
     async def setup_hook(self) -> None:
         """Sync command tree with Discord on ready."""
