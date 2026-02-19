@@ -69,35 +69,31 @@ def _format_project(
     regress_24h: int,
 ) -> str:
     """Format a single project entry for the /hawk list response."""
-    header = f"**{info.id}** [{ProjectState(info.state).name}] {info.name}"
-    link = f"  {info.rectangle.to_link()}"
+    state = ProjectState(info.state)
+    header = f"**{info.id:04}** [{state.name}] {info.name} <{info.rectangle.to_link()}>"
 
-    if info.state == ProjectState.INACTIVE:
-        return f"{header}\n{link}"
+    if state == ProjectState.INACTIVE:
+        return header
 
     if info.last_check == 0:
-        return f"{header}\n  \U0001fae3 Not yet checked\n{link}"
+        return f"{header}\n  🤔 Not yet checked"
 
     if latest and latest.status == DiffStatus.COMPLETE:
-        return (
-            f"{header}\n"
-            f"  \u2705 Complete since <t:{info.max_completion_time}:R>!"
-            f" \u00b7 {latest.num_target:,} px total\n{link}"
-        )
+        return f"{header}\n  ✅ Complete since <t:{info.max_completion_time}:R>! · {latest.num_target:,} px total"
 
     # In progress (or not-started with last_check > 0)
-    if latest:
-        parts = [f"{latest.completion_percent:.1f}% complete", f"{latest.num_remaining:,} px remaining"]
-    else:
+    if not latest:
         parts = []
+    else:
+        emoji = "⏳" if latest.completion_percent < 0.5 else "⌛"
+        parts = [f"{emoji} {latest.completion_percent:.1f}% complete", f"{latest.num_remaining:,} px remaining"]
 
     if progress_24h or regress_24h:
         parts.append(f"Last 24h +{progress_24h}-{regress_24h}")
 
-    stats = " \u00b7 ".join(parts)
-    if stats:
-        return f"{header}\n  \u231b {stats}\n{link}"
-    return f"{header}\n{link}"
+    if not parts:
+        return header
+    return f"{header}\n  {' · '.join(parts)}"
 
 
 async def list_projects(discord_id: int) -> str | None:
