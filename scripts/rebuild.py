@@ -8,10 +8,11 @@ What's recovered:
   - ProjectInfo coordinates and bounds (from filenames + image dimensions)
   - TileInfo coordinates and timestamps (from tiles/tile-{x}_{y}.png mtimes)
   - TileProject relationships (computed from project rectangles)
+  - HistoryChange records inferred from snapshots/tiles for projects with completed pixels
 
 What's permanently lost:
   - Person and project names (placeholders used)
-  - HistoryChange records, rate tracking, max completion history
+  - Granular HistoryChange timeline (only a single inferred record per project)
   - HTTP ETags and queue heat assignments (tiles start as burning)
 
 Usage:
@@ -23,8 +24,9 @@ import asyncio
 from pixel_hawk.config import load_config
 from pixel_hawk.db import database
 from pixel_hawk.geometry import Point, Rectangle, Size
-from pixel_hawk.models import Person, ProjectInfo, ProjectState, TileInfo, TileProject
+from pixel_hawk.models import DiffStatus, HistoryChange, Person, ProjectInfo, ProjectState, TileInfo, TileProject
 from pixel_hawk.palette import PALETTE
+from pixel_hawk.projects import get_flattened_data, stitch_tiles
 
 
 async def rebuild() -> None:
@@ -66,7 +68,7 @@ async def rebuild() -> None:
                 name = png_path.stem
                 mtime = round(png_path.stat().st_mtime)
 
-                existing = await ProjectInfo.filter(owner_id=person_id, name=name).first()
+                existing = await ProjectInfo.filter(owner_id=person_id, x=rect.point.x, y=rect.point.y).first()
                 if existing:
                     continue
 
@@ -129,6 +131,68 @@ async def rebuild() -> None:
                 if created:
                     relations_created += 1
 
+        # --- Infer HistoryChange for projects with completed pixels ---
+        history_created = 0
+        for person_dir in person_dirs:
+            person_id = int(person_dir.name)
+            projects = await ProjectInfo.filter(owner_id=person_id).all()
+            for info in projects:
+                existing = await HistoryChange.filter(project=info).exists()
+                if existing:
+                    continue
+
+                target_path = config.projects_dir / str(person_id) / info.filename
+                with PALETTE.open_file(target_path) as target:
+                    target_data = get_flattened_data(target)
+
+                snapshot_path = config.snapshots_dir / str(person_id) / info.filename
+                canvas_data = None
+                timestamp = info.last_check
+
+                if snapshot_path.exists():
+                    with PALETTE.open_file(snapshot_path) as snapshot:
+                        canvas_data = get_flattened_data(snapshot)
+                    timestamp = round(snapshot_path.stat().st_mtime)
+                else:
+                    rect = info.rectangle
+                    all_cached = all((config.tiles_dir / f"tile-{tile}.png").exists() for tile in rect.tiles)
+                    if all_cached:
+                        with await stitch_tiles(rect) as canvas:
+                            canvas_data = get_flattened_data(canvas)
+
+                if canvas_data is None:
+                    continue
+
+                num_target = sum(1 for v in target_data if v) or 1
+                num_remaining = sum(1 for curr, tgt in zip(canvas_data, target_data) if tgt and curr != tgt)
+
+                if num_remaining >= num_target:
+                    continue
+
+                completed = num_target - num_remaining
+                percent = 100.0 - (num_remaining * 100.0 / num_target)
+                status = DiffStatus.COMPLETE if num_remaining == 0 else DiffStatus.IN_PROGRESS
+
+                await HistoryChange.create(
+                    project=info,
+                    timestamp=timestamp,
+                    status=status,
+                    num_remaining=num_remaining,
+                    num_target=num_target,
+                    completion_percent=percent,
+                    progress_pixels=completed,
+                    regress_pixels=0,
+                )
+
+                info.max_completion_pixels = num_remaining
+                info.max_completion_percent = percent
+                info.max_completion_time = timestamp
+                info.total_progress = completed
+                await info.save()
+
+                history_created += 1
+                print(f"  + History for {person_id}/{info.name} ({percent:.1f}% complete)")
+
         # --- Update person totals ---
         all_persons = await Person.all()
         for person in all_persons:
@@ -143,6 +207,7 @@ async def rebuild() -> None:
         print(f"  Tiles:         {tiles_created} created, {total_tiles} total")
         total_relations = await TileProject.all().count()
         print(f"  Relationships: {relations_created} created, {total_relations} total")
+        print(f"  History:       {history_created} inferred")
 
 
 if __name__ == "__main__":
