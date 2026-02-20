@@ -81,6 +81,8 @@ uv run hawk
 - `src/pixel_hawk/queues.py` — `QueueSystem`, temperature-based tile queues with Zipf distribution, tile metadata tracking
 - `src/pixel_hawk/interactions.py` — Discord bot integration: `HawkBot` (slash commands under `/hawk` group), `grant_admin()` (admin-me flow), `list_projects()` (project listing with stats, 24h changes, Discord message truncation), `maybe_bot()` (lifecycle context manager)
 - `scripts/rebuild.py` — Idempotent database rebuild from filesystem artifacts (projects, tiles, snapshots)
+- `scripts/install-service.sh` — Generates and installs systemd service unit (detects user, paths, uv dynamically)
+- `.github/workflows/deploy.yml` — Auto-deploy on push to main via self-hosted runner (stop → pull → sync → start)
 
 ## Architecture conventions
 

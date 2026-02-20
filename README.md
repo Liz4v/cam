@@ -224,6 +224,28 @@ uv run python scripts/rebuild.py
 
 This reconstructs Person, ProjectInfo, TileInfo, and TileProject records by scanning the `projects/` and `tiles/` directories. The script is idempotent — safe to re-run on an existing database. Person and project names will use placeholders; historical data (HistoryChange records, rate tracking) is permanently lost.
 
+## Deployment (Linux/systemd)
+
+For production deployment on a Linux server with systemd:
+
+```bash
+git clone https://github.com/Liz4v/pixel-hawk.git ~/pixel-hawk
+cd ~/pixel-hawk
+bash scripts/install-service.sh
+```
+
+The install script detects the current user, repo location, and `uv` path, then generates and installs a systemd service unit. It is idempotent — safe to re-run after updates.
+
+Pushes to `main` are automatically deployed via a self-hosted GitHub Actions runner (see `.github/workflows/deploy.yml`).
+
+After installation, configure the Discord bot by copying `config.example.toml`:
+
+```bash
+cp config.example.toml nest/config.toml
+# Edit nest/config.toml with your bot token
+sudo systemctl restart pixel-hawk
+```
+
 ## Development
 
 The project uses `ruff` for linting (line-length = 120), `ty` for type checking, and `pytest` for testing with 95% coverage threshold.
