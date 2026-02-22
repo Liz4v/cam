@@ -11,6 +11,7 @@ import time
 import uuid
 
 from loguru import logger
+from PIL import Image
 
 from .config import get_config
 from .geometry import Point
@@ -58,27 +59,25 @@ async def grant_admin(discord_id: int, display_name: str, token: str, expected_t
     return f"Admin access granted to {person.name}."
 
 
-_ENTIRELY_RE = re.compile(
-    r'^(?P<tx>\d+)(?P<sep>[ ._-])(?P<ty>\d+)(?P=sep)(?P<px>\d+)(?P=sep)(?P<py>\d+)$'
-)
+_ENTIRELY_RE = re.compile(r"^(?P<tx>\d+)(?P<sep>[ ._-])(?P<ty>\d+)(?P=sep)(?P<px>\d+)(?P=sep)(?P<py>\d+)$")
 _ENDS_WITH_RE = re.compile(
-    r'^(?P<name>.+)[ ._-](?P<tx>\d+)(?P<sep>[ ._-])(?P<ty>\d+)(?P=sep)(?P<px>\d+)(?P=sep)(?P<py>\d+)$'
+    r"^(?P<name>.+)[ ._-](?P<tx>\d+)(?P<sep>[ ._-])(?P<ty>\d+)(?P=sep)(?P<px>\d+)(?P=sep)(?P<py>\d+)$"
 )
 _BEGINS_WITH_RE = re.compile(
-    r'^(?P<tx>\d+)(?P<sep>[ ._-])(?P<ty>\d+)(?P=sep)(?P<px>\d+)(?P=sep)(?P<py>\d+)[ ._-](?P<name>.+)$'
+    r"^(?P<tx>\d+)(?P<sep>[ ._-])(?P<ty>\d+)(?P=sep)(?P<px>\d+)(?P=sep)(?P<py>\d+)[ ._-](?P<name>.+)$"
 )
 
 
 def parse_filename(filename: str) -> tuple[str | None, tuple[int, int, int, int] | None]:
     """Extract coords (tx, ty, px, py) and optional project name from a filename."""
-    stem = filename[:-4] if filename.lower().endswith('.png') else filename
+    stem = filename[:-4] if filename.lower().endswith(".png") else filename
     for pattern in (_ENTIRELY_RE, _ENDS_WITH_RE, _BEGINS_WITH_RE):
         m = pattern.match(stem)
         if not m:
             continue
-        tx, ty, px, py = int(m['tx']), int(m['ty']), int(m['px']), int(m['py'])
+        tx, ty, px, py = int(m["tx"]), int(m["ty"]), int(m["px"]), int(m["py"])
         if 0 <= tx < 2048 and 0 <= ty < 2048 and 0 <= px < 1000 and 0 <= py < 1000:
-            name = m.groupdict().get('name')
+            name = m.groupdict().get("name")
             return name, (tx, ty, px, py)
     return stem or None, None
 
@@ -125,11 +124,14 @@ async def new_project(discord_id: int, image_data: bytes, filename: str) -> str 
     if not image_data.startswith(PNG_HEADER):
         raise ValueError("Not a PNG file.")
 
-    async with PALETTE.aopen_bytes(image_data) as image:
-        width, height = image.size
+    try:
+        async with PALETTE.aopen_bytes(image_data) as image:
+            width, height = image.size
+    except Image.DecompressionBombError:
+        raise ValueError("Image too large. Maximum 1000px.")
 
     if width > 1000 or height > 1000:
-        raise ValueError(f"Image too large ({width}x{height}). Maximum 1000x1000 px.")
+        raise ValueError(f"Image too large ({width}x{height}). Maximum 1000px.")
 
     inferred_name, inferred_coords = parse_filename(filename)
 
