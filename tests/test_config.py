@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pixel_hawk.config
-from pixel_hawk.config import Config, get_config, load_config
+from pixel_hawk.config import Config, DiscordSettings, get_config, load_config
 
 
 class TestConfig:
@@ -44,6 +44,39 @@ class TestConfig:
         (tmp_path / "config.toml").write_text('[discord]\nbot_token = "second"\n')
         second = config.config_toml
         assert first is second  # Same object, cached
+
+
+class TestDiscordSettings:
+    """Tests for Config.discord typed settings."""
+
+    def test_defaults_without_config_file(self, tmp_path):
+        config = Config(home=tmp_path)
+        assert config.discord == DiscordSettings(bot_token="", command_prefix="hawk")
+
+    def test_reads_bot_token(self, tmp_path):
+        (tmp_path / "config.toml").write_text('[discord]\nbot_token = "secret"\n')
+        config = Config(home=tmp_path)
+        assert config.discord.bot_token == "secret"
+
+    def test_empty_bot_token_stays_empty(self, tmp_path):
+        (tmp_path / "config.toml").write_text('[discord]\nbot_token = ""\n')
+        config = Config(home=tmp_path)
+        assert config.discord.bot_token == ""
+
+    def test_reads_command_prefix(self, tmp_path):
+        (tmp_path / "config.toml").write_text('[discord]\ncommand_prefix = "testhawk"\n')
+        config = Config(home=tmp_path)
+        assert config.discord.command_prefix == "testhawk"
+
+    def test_command_prefix_defaults_to_hawk(self, tmp_path):
+        (tmp_path / "config.toml").write_text("[discord]\n")
+        config = Config(home=tmp_path)
+        assert config.discord.command_prefix == "hawk"
+
+    def test_discord_cached(self, tmp_path):
+        (tmp_path / "config.toml").write_text('[discord]\nbot_token = "x"\n')
+        config = Config(home=tmp_path)
+        assert config.discord is config.discord
 
 
 class TestLoadConfig:

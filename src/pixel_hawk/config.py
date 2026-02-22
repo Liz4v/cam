@@ -12,8 +12,16 @@ import functools
 import os
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
+
+
+@dataclass
+class DiscordSettings:
+    """Typed settings from the [discord] section of config.toml."""
+
+    bot_token: str = ""
+    command_prefix: str = "hawk"
 
 
 @dataclass
@@ -64,6 +72,12 @@ class Config:
                 return tomllib.load(f)
         except (IOError, ValueError):
             return {}
+
+    @functools.cached_property
+    def discord(self) -> DiscordSettings:
+        """Typed access to [discord] settings from config.toml."""
+        raw = self.config_toml.get("discord", {})
+        return DiscordSettings(**{f.name: raw[f.name] for f in fields(DiscordSettings) if f.name in raw})
 
 
 def load_config(args: list[str] | None = None) -> Config:

@@ -165,9 +165,10 @@ An optional Discord bot runs alongside the polling loop, providing slash command
 ```toml
 [discord]
 bot_token = "your-bot-token"
+# command_prefix = "hawk"
 ```
 
-If no token is configured, the bot is silently skipped.
+If no token is configured, the bot is silently skipped. The `command_prefix` setting changes the slash command group name (default: `hawk`).
 
 **Commands:**
 - `/hawk sa myself <token>` — Grant admin access using a one-time UUID (printed to console and saved to `nest/data/admin-me.txt` on each startup)

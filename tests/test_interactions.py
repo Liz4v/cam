@@ -14,7 +14,6 @@ from pixel_hawk.interactions import (
     generate_admin_token,
     grant_admin,
     list_projects,
-    load_bot_token,
     maybe_bot,
 )
 from pixel_hawk.models import BotAccess, DiffStatus, HistoryChange, Person, ProjectInfo, ProjectState
@@ -39,49 +38,13 @@ class TestBotAccess:
         assert access & 0x1
 
 
-# load_bot_token tests
-
-
-class TestLoadBotToken:
-    def test_no_config_file(self, setup_config):
-        assert load_bot_token() is None
-
-    def test_empty_config(self, setup_config):
-        config_path = get_config().home / "config.toml"
-        config_path.write_text("")
-        _invalidate_config_toml()
-        assert load_bot_token() is None
-
-    def test_no_discord_section(self, setup_config):
-        config_path = get_config().home / "config.toml"
-        config_path.write_text("[other]\nkey = 'value'\n")
-        _invalidate_config_toml()
-        assert load_bot_token() is None
-
-    def test_no_bot_token_key(self, setup_config):
-        config_path = get_config().home / "config.toml"
-        config_path.write_text("[discord]\nother_key = 'value'\n")
-        _invalidate_config_toml()
-        assert load_bot_token() is None
-
-    def test_empty_bot_token(self, setup_config):
-        config_path = get_config().home / "config.toml"
-        config_path.write_text('[discord]\nbot_token = ""\n')
-        _invalidate_config_toml()
-        assert load_bot_token() is None
-
-    def test_valid_bot_token(self, setup_config):
-        config_path = get_config().home / "config.toml"
-        config_path.write_text('[discord]\nbot_token = "my-secret-token"\n')
-        _invalidate_config_toml()
-        assert load_bot_token() == "my-secret-token"
-
 
 def _invalidate_config_toml():
     """Clear the cached_property so config.toml is re-read."""
     cfg = get_config()
     # cached_property stores the value in the instance __dict__
     cfg.__dict__.pop("config_toml", None)
+    cfg.__dict__.pop("discord", None)
 
 
 # generate_admin_token tests
@@ -89,23 +52,30 @@ def _invalidate_config_toml():
 
 class TestGenerateAdminToken:
     def test_creates_file(self, setup_config):
-        token = generate_admin_token()
+        token = generate_admin_token("hawk")
         path = get_config().data_dir / "admin-me.txt"
         assert path.exists()
         assert token in path.read_text()
 
     def test_returns_valid_uuid4(self, setup_config):
-        token = generate_admin_token()
+        token = generate_admin_token("hawk")
         parsed = uuid.UUID(token, version=4)
         assert str(parsed) == token
 
     def test_overwrites_on_each_call(self, setup_config):
-        token1 = generate_admin_token()
-        token2 = generate_admin_token()
+        token1 = generate_admin_token("hawk")
+        token2 = generate_admin_token("hawk")
         assert token1 != token2
         # File should contain the latest token
         path = get_config().data_dir / "admin-me.txt"
         assert token2 in path.read_text()
+
+    def test_custom_command_prefix(self, setup_config):
+        token = generate_admin_token(command_prefix="testhawk")
+        path = get_config().data_dir / "admin-me.txt"
+        content = path.read_text()
+        assert content.startswith("/testhawk sa myself ")
+        assert token in content
 
 
 # grant_admin tests
@@ -192,24 +162,33 @@ class TestPersonDiscordFields:
 
 class TestHawkBot:
     def test_construction(self):
-        bot = HawkBot("test-admin-token")
+        bot = HawkBot("test-admin-token", "hawk")
         assert bot.admin_token == "test-admin-token"
+        assert bot.command_prefix == "hawk"
         assert bot.tree is not None
 
     def test_command_tree_has_hawk_group(self):
-        bot = HawkBot("test-token")
+        bot = HawkBot("test-token", "hawk")
         commands = bot.tree.get_commands()
         names = [c.name for c in commands]
         assert "hawk" in names
 
+    def test_custom_command_prefix(self):
+        bot = HawkBot("test-token", command_prefix="testhawk")
+        assert bot.command_prefix == "testhawk"
+        commands = bot.tree.get_commands()
+        names = [c.name for c in commands]
+        assert "testhawk" in names
+        assert "hawk" not in names
+
     async def test_on_ready_logs(self):
-        bot = HawkBot("test-token")
+        bot = HawkBot("test-token", "hawk")
         # on_ready just logs, should not raise
         bot._connection.user = None  # type: ignore[assignment]
         await bot.on_ready()
 
     async def test_setup_hook_syncs_tree(self):
-        bot = HawkBot("test-token")
+        bot = HawkBot("test-token", "hawk")
         bot.tree.sync = AsyncMock()  # type: ignore[method-assign]
         await bot.setup_hook()
         bot.tree.sync.assert_awaited_once()

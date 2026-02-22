@@ -3,3 +3,4 @@
 
 [discord]
 bot_token = ""
+# command_prefix = "hawk"

@@ -69,7 +69,7 @@ uv run hawk
 ## File/Module map (where to look)
 
 - `src/pixel_hawk/__init__.py` — empty package marker (just comment + docstring)
-- `src/pixel_hawk/config.py` — `Config` dataclass, `load_config()`, `get_config()`, CONFIG singleton
+- `src/pixel_hawk/config.py` — `DiscordSettings` dataclass, `Config` dataclass, `load_config()`, `get_config()`, CONFIG singleton
 - `src/pixel_hawk/db.py` — database async context manager (`database()`), Tortoise ORM config, Aerich integration
 - `src/pixel_hawk/models.py` — `Person` (user model with watched_tiles_count, active_projects_count, update_totals()), `ProjectState` IntEnum (ACTIVE/PASSIVE/INACTIVE), `ProjectInfo` (pure Tortoise model with owner FK, random ID via `save_as_new()`), `HistoryChange` (diff event log), `DiffStatus` IntEnum, `TileInfo` (tile metadata: coordinates, heat, timestamps, etag), `TileProject` (tile-project junction table)
 - `src/pixel_hawk/main.py` — application entry, unified polling loop, DB context manager usage, person totals refresh
@@ -79,7 +79,7 @@ uv run hawk
 - `src/pixel_hawk/projects.py` — `Project` model (async diffs, snapshots, database-first loading via from_info()), `stitch_tiles()` (async canvas assembly)
 - `src/pixel_hawk/metadata.py` — functional service layer for ProjectInfo business logic (pixel counting, snapshot comparison, rate tracking, owner-attributed logging)
 - `src/pixel_hawk/queues.py` — `QueueSystem`, temperature-based tile queues with Zipf distribution, tile metadata tracking
-- `src/pixel_hawk/interactions.py` — Discord bot integration: `HawkBot` (slash commands under `/hawk` group), `grant_admin()` (admin-me flow), `list_projects()` (project listing with stats, 24h changes, Discord message truncation), `maybe_bot()` (lifecycle context manager)
+- `src/pixel_hawk/interactions.py` — Discord bot integration: `HawkBot` (slash commands under configurable command group, default `/hawk`), `grant_admin()` (admin-me flow), `list_projects()` (project listing with stats, 24h changes, Discord message truncation), `maybe_bot()` (lifecycle context manager)
 - `scripts/rebuild.py` — Idempotent database rebuild from filesystem artifacts (projects, tiles, snapshots)
 - `scripts/install-service.sh` — Generates and installs systemd service unit (detects user, paths, uv dynamically)
 - `.github/workflows/deploy.yml` — Auto-deploy on push to main via self-hosted runner (stop → pull → sync → start)
