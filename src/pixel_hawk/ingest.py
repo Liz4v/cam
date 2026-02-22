@@ -55,11 +55,7 @@ class TileChecker:
             state__in=[ProjectState.ACTIVE, ProjectState.PASSIVE],
         ).prefetch_related("owner")
 
-        projects = []
-        for info in infos:
-            path = get_config().projects_dir / str(info.owner.id) / info.filename
-            projects.append(Project(path, info.rectangle, info))
-        return projects
+        return [Project(info) for info in infos]
 
     async def check_next_tile(self) -> None:
         """Check one tile for changes using queue-based selection and update affected projects."""

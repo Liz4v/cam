@@ -132,11 +132,17 @@ class ProjectInfo(Model):
 
     @property
     def rectangle(self) -> Rectangle:
+        assert self.state != ProjectState.CREATING, "CREATING projects have no coordinates"
         return Rectangle.from_point_size(Point(self.x, self.y), Size(self.width, self.height))
 
     @property
     def filename(self) -> str:
-        """Compute filename from coordinates (coordinates only, no name prefix)."""
+        """Filename for this project's PNG on disk.
+
+        CREATING projects use ``new_{id}.png``; all others use coordinate-only format.
+        """
+        if self.state == ProjectState.CREATING:
+            return f"new_{self.id}.png"
         tx, ty, px, py = Point(self.x, self.y).to4()
         return f"{tx}_{ty}_{px}_{py}.png"
 

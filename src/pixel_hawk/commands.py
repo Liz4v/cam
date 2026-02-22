@@ -97,19 +97,20 @@ def _parse_coords(coords_str: str) -> tuple[int, int, int, int]:
 
 
 def _set_coords(info: ProjectInfo, person_id: int, x: int, y: int) -> None:
-    """Update info.x/y and rename the file from pending to canonical (or between canonicals)."""
-    person_dir = get_config().projects_dir / str(person_id)
-    pending = person_dir / f"new_{info.id}.png"
-    old_canonical = person_dir / info.filename
+    """Update info coordinates and rename the project file accordingly.
 
+    Auto-transitions CREATING projects to ACTIVE so that info.filename
+    reflects the new coordinate-based name.
+    """
+    person_dir = get_config().projects_dir / str(person_id)
+    old = person_dir / info.filename
     info.x = x
     info.y = y
-    new_canonical = person_dir / info.filename
-
-    if pending.exists():
-        pending.rename(new_canonical)
-    elif old_canonical != new_canonical and old_canonical.exists():
-        old_canonical.rename(new_canonical)
+    if info.state == ProjectState.CREATING:
+        info.state = ProjectState.ACTIVE
+    new = person_dir / info.filename
+    if old != new and old.exists():
+        old.rename(new)
 
 
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
@@ -171,7 +172,7 @@ async def new_project(discord_id: int, image_data: bytes, filename: str) -> str 
             f"Name: {info.name} · Coords: {point}"
         )
 
-    await asyncio.to_thread((person_dir / f"new_{info.id}.png").write_bytes, image_data)
+    await asyncio.to_thread((person_dir / info.filename).write_bytes, image_data)
     logger.info(f"{person.name}: Created project {info.id:04} '{info.name}' ({width}x{height}, awaiting coords)")
     return (
         f"Project **{info.id:04}** created ({width}x{height} px).\n"
@@ -218,10 +219,8 @@ async def edit_project(
         changes.append(f"Coords: {tx}_{ty}_{px}_{py} ({linked} tiles)")
 
     if state is not None:
-        if state in (ProjectState.ACTIVE, ProjectState.PASSIVE):
-            canonical = get_config().projects_dir / str(person.id) / info.filename
-            if not canonical.exists():
-                raise ValueError(f"Cannot activate: set coordinates first with `/{get_command_prefix()} edit`.")
+        if state in (ProjectState.ACTIVE, ProjectState.PASSIVE) and info.state == ProjectState.CREATING:
+            raise ValueError(f"Cannot activate: set coordinates first with `/{get_command_prefix()} edit`.")
         info.state = state
         changes.append(f"State: {state.name}")
 
@@ -244,10 +243,10 @@ def _format_project(
 ) -> str:
     """Format a single project entry for the /hawk list response."""
     state = ProjectState(info.state)
-    header = f"**{info.id:04}** [{state.name}] {info.name} <{info.rectangle.to_link()}>"
-
     if state == ProjectState.CREATING:
         return f"**{info.id:04}** [CREATING] {info.name}"
+
+    header = f"**{info.id:04}** [{state.name}] {info.name} <{info.rectangle.to_link()}>"
 
     if state == ProjectState.INACTIVE:
         return header

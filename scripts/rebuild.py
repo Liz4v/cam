@@ -108,7 +108,7 @@ async def rebuild() -> None:
                 print(f"  + Tile ({tx}, {ty})")
 
         # --- TileProject relationships ---
-        all_projects = await ProjectInfo.all()
+        all_projects = await ProjectInfo.exclude(state=ProjectState.CREATING).all()
         for info in all_projects:
             rect = info.rectangle
             for tile in rect.tiles:
@@ -135,7 +135,7 @@ async def rebuild() -> None:
         history_created = 0
         for person_dir in person_dirs:
             person_id = int(person_dir.name)
-            projects = await ProjectInfo.filter(owner_id=person_id).all()
+            projects = await ProjectInfo.filter(owner_id=person_id).exclude(state=ProjectState.CREATING).all()
             for info in projects:
                 existing = await HistoryChange.filter(project=info).exists()
                 if existing:

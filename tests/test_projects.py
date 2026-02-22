@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 from pixel_hawk import projects
+from pixel_hawk.config import get_config
 from pixel_hawk.geometry import Point, Rectangle, Size
 from pixel_hawk.models import HistoryChange, Person, ProjectInfo
 from pixel_hawk.palette import PALETTE, AsyncImage
@@ -39,12 +40,22 @@ class FakeAsyncImage:
         return self._image
 
 
-async def _make_project(path, rect, owner_id):
-    """Helper to create a Project with a DB-backed ProjectInfo."""
-    info = await ProjectInfo.get_or_create_from_rect(rect, owner_id, path.with_suffix("").name)
-    # Fetch owner relationship for metadata log messages
+async def _make_project(rect, owner_id, *, name="test", touch=False):
+    """Helper to create a Project with a DB-backed ProjectInfo.
+
+    Creates the project file at the canonical path. If touch=True, creates an empty file
+    instead of a valid paletted image.
+    """
+    info = await ProjectInfo.get_or_create_from_rect(rect, owner_id, name)
     await info.fetch_related("owner")
-    return projects.Project(path, rect, info)
+    path = get_config().projects_dir / str(info.owner.id) / info.filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if touch:
+        path.touch()
+    else:
+        im = _paletted_image(rect.size, value=1)
+        im.save(path)
+    return projects.Project(info)
 
 
 # Database-first loading tests
@@ -128,12 +139,10 @@ async def test_projectinfo_filename_property(test_person):
 # Project.run_diff tests
 
 
-async def test_run_diff_branches(monkeypatch, tmp_path, test_person):
+async def test_run_diff_branches(monkeypatch, test_person):
     """Test run_diff with various scenarios (no change, changes)."""
-    p = tmp_path / "proj_0_0_1_1.png"
-    p.touch()
     rect = Rectangle.from_point_size(Point.from4(0, 0, 0, 0), Size(1, 1))
-    proj = await _make_project(p, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     class CM:
         def __init__(self, data):
@@ -175,13 +184,10 @@ async def test_run_diff_branches(monkeypatch, tmp_path, test_person):
     await proj.run_diff()
 
 
-async def test_run_diff_complete_and_remaining(monkeypatch, tmp_path, test_person):
+async def test_run_diff_complete_and_remaining(monkeypatch, test_person):
     """Test run_diff complete and progress calculation paths."""
-    proj_path = tmp_path / "proj_0_0_0_0.png"
-    proj_path.touch()
-
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    p = await _make_project(proj_path, rect, test_person.id)
+    p = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((4, 4), value=1)
 
@@ -207,62 +213,45 @@ async def test_run_diff_complete_and_remaining(monkeypatch, tmp_path, test_perso
 # Project.has_been_modified tests
 
 
-async def test_project_has_been_modified(tmp_path, test_person):
+async def test_project_has_been_modified(test_person):
     """Test Project.has_been_modified detects file changes."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=1)
-    im.save(path)
-
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
 
     assert not proj.has_been_modified()
 
-    real_mtime = round(path.stat().st_mtime)
+    real_mtime = round(proj.path.stat().st_mtime)
     proj.mtime = real_mtime - 1
 
     assert proj.has_been_modified()
 
 
-async def test_project_has_been_modified_with_oserror(tmp_path, test_person):
+async def test_project_has_been_modified_with_oserror(test_person):
     """Test Project.has_been_modified handles OSError."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=1)
-    im.save(path)
-
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
 
-    path.unlink()
+    proj.path.unlink()
     assert proj.has_been_modified()
 
 
-async def test_project_has_been_modified_with_none_mtime(tmp_path, test_person):
+async def test_project_has_been_modified_with_none_mtime(test_person):
     """Test Project.has_been_modified when mtime is 0."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=1)
-    im.save(path)
-
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
     proj.mtime = 0
 
     assert proj.has_been_modified()
 
 
-async def test_project_equality_and_hash(tmp_path, test_person):
+async def test_project_equality_and_hash(test_person):
     """Test Project __eq__ and __hash__ methods."""
-    path1 = tmp_path / "proj_0_0_0_0.png"
-    path2 = tmp_path / "proj_1_1_1_1.png"
+    rect1 = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
+    rect2 = Rectangle.from_point_size(Point(2000, 0), Size(2, 2))
 
-    im = _paletted_image((2, 2), value=1)
-    im.save(path1)
-    im.save(path2)
-
-    rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj1 = await _make_project(path1, rect, test_person.id)
-    proj2 = await _make_project(path1, rect, test_person.id)
-    proj3 = await _make_project(path2, rect, test_person.id)
+    proj1 = await _make_project(rect1, test_person.id, name="a")
+    proj2 = await _make_project(rect1, test_person.id, name="a")
+    proj3 = await _make_project(rect2, test_person.id, name="b")
 
     assert proj1 == proj2
     assert hash(proj1) == hash(proj2)
@@ -271,27 +260,20 @@ async def test_project_equality_and_hash(tmp_path, test_person):
     assert proj1 != "not a project"
 
 
-async def test_project_deletion(tmp_path, test_person):
+async def test_project_deletion(test_person):
     """Test Project deletion does not raise."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=1)
-    im.save(path)
-
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
     del proj
 
 
 # ProjectInfo DB persistence tests
 
 
-async def test_project_info_save_and_load(tmp_path, test_person):
+async def test_project_info_save_and_load(test_person):
     """Test ProjectInfo persistence via DB."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=1)
-    im.save(path)
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
 
     proj.info.max_completion_pixels = 42
     proj.info.total_progress = 100
@@ -303,13 +285,10 @@ async def test_project_info_save_and_load(tmp_path, test_person):
     assert loaded.total_progress == 100
 
 
-async def test_project_snapshot_save_and_load(tmp_path, monkeypatch, test_person):
+async def test_project_snapshot_save_and_load(test_person):
     """Test snapshot persistence."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((4, 4), value=1)
-    im.save(path)
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
 
     snapshot = _paletted_image((4, 4), value=2)
     await proj.save_snapshot(snapshot)
@@ -322,24 +301,19 @@ async def test_project_snapshot_save_and_load(tmp_path, monkeypatch, test_person
         assert all(v == 2 for v in data)
 
 
-async def test_project_snapshot_load_nonexistent(tmp_path, test_person):
+async def test_project_snapshot_load_nonexistent(test_person):
     """Test loading snapshot when it doesn't exist."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    im = _paletted_image((2, 2), value=1)
-    im.save(path)
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
 
     async with proj.load_snapshot_if_exists() as snapshot:
         assert snapshot is None
 
 
-async def test_run_diff_with_info_tracking(tmp_path, monkeypatch, test_person):
+async def test_run_diff_with_info_tracking(monkeypatch, test_person):
     """Test that run_diff updates info correctly."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -364,12 +338,10 @@ async def test_run_diff_with_info_tracking(tmp_path, monkeypatch, test_person):
     assert proj.snapshot_path.exists()
 
 
-async def test_run_diff_creates_history_change(tmp_path, monkeypatch, test_person):
+async def test_run_diff_creates_history_change(monkeypatch, test_person):
     """Test that run_diff creates a HistoryChange record when progress is detected."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -411,12 +383,10 @@ async def test_run_diff_creates_history_change(tmp_path, monkeypatch, test_perso
     assert changes[0].num_target > 0
 
 
-async def test_run_diff_skips_history_change_without_progress_or_regress(tmp_path, monkeypatch, test_person):
+async def test_run_diff_skips_history_change_without_progress_or_regress(monkeypatch, test_person):
     """Test that HistoryChange is NOT saved when there are no progress or regress pixels."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     # Target has some non-transparent pixels; current partially matches (in-progress)
     target = _paletted_image((4, 4), value=0)
@@ -451,12 +421,10 @@ async def test_run_diff_skips_history_change_without_progress_or_regress(tmp_pat
     assert len(changes) == 0
 
 
-async def test_run_diff_saves_history_change_with_progress(tmp_path, monkeypatch, test_person):
+async def test_run_diff_saves_history_change_with_progress(monkeypatch, test_person):
     """Test that HistoryChange IS saved when there are progress pixels."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -499,12 +467,10 @@ async def test_run_diff_saves_history_change_with_progress(tmp_path, monkeypatch
     assert changes[0].regress_pixels == 0
 
 
-async def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch, test_person):
+async def test_run_diff_progress_and_regress_tracking(monkeypatch, test_person):
     """Test progress/regress detection between checks."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -544,12 +510,10 @@ async def test_run_diff_progress_and_regress_tracking(tmp_path, monkeypatch, tes
     assert proj.info.total_progress == initial_progress + 1
 
 
-async def test_run_diff_regress_detection(tmp_path, monkeypatch, test_person):
+async def test_run_diff_regress_detection(monkeypatch, test_person):
     """Test regress (griefing) detection."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(4, 4))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((4, 4), value=0)
     target.putpixel((0, 0), 1)
@@ -580,12 +544,10 @@ async def test_run_diff_regress_detection(tmp_path, monkeypatch, test_person):
     assert proj.info.largest_regress_pixels == 1
 
 
-async def test_run_diff_complete_status(tmp_path, monkeypatch, test_person):
+async def test_run_diff_complete_status(monkeypatch, test_person):
     """Test complete project detection."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(2, 2))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     target = _paletted_image((2, 2), value=1)
     current = _paletted_image((2, 2), value=1)
@@ -602,12 +564,10 @@ async def test_run_diff_complete_status(tmp_path, monkeypatch, test_person):
     assert "Complete" in proj.info.last_log_message
 
 
-async def test_has_missing_tiles_all_present(tmp_path, monkeypatch, setup_config, test_person):
+async def test_has_missing_tiles_all_present(setup_config, test_person):
     """Test _has_missing_tiles returns False when all tiles exist."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     for tile in rect.tiles:
         tile_file = setup_config.tiles_dir / f"tile-{tile}.png"
@@ -616,12 +576,10 @@ async def test_has_missing_tiles_all_present(tmp_path, monkeypatch, setup_config
     assert proj._has_missing_tiles() is False
 
 
-async def test_has_missing_tiles_some_missing(tmp_path, monkeypatch, setup_config, test_person):
+async def test_has_missing_tiles_some_missing(setup_config, test_person):
     """Test _has_missing_tiles returns True when some tiles are missing."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 2000))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     tile_file = setup_config.tiles_dir / "tile-0_0.png"
     tile_file.touch()
@@ -629,26 +587,18 @@ async def test_has_missing_tiles_some_missing(tmp_path, monkeypatch, setup_confi
     assert proj._has_missing_tiles() is True
 
 
-async def test_has_missing_tiles_all_missing(tmp_path, monkeypatch, setup_config, test_person):
+async def test_has_missing_tiles_all_missing(setup_config, test_person):
     """Test _has_missing_tiles returns True when all tiles are missing."""
-    path = tmp_path / "proj_0_0_0_0.png"
-    path.touch()
     rect = Rectangle.from_point_size(Point(0, 0), Size(1000, 1000))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id, touch=True)
 
     assert proj._has_missing_tiles() is True
 
 
-async def test_run_diff_sets_has_missing_tiles(tmp_path, monkeypatch, setup_config, test_person):
+async def test_run_diff_sets_has_missing_tiles(monkeypatch, setup_config, test_person):
     """Test run_diff properly sets has_missing_tiles flag."""
-    path = tmp_path / "proj_0_0_0_0.png"
-
-    im = PALETTE.new((10, 10))
-    im.putdata([1] * 100)
-    im.save(path)
-
     rect = Rectangle.from_point_size(Point(0, 0), Size(10, 10))
-    proj = await _make_project(path, rect, test_person.id)
+    proj = await _make_project(rect, test_person.id)
 
     async def fake_stitch(rect):
         return _paletted_image((10, 10), 0)

@@ -10,12 +10,12 @@ from PIL import Image
 from pixel_hawk.commands import (
     DISCORD_MESSAGE_LIMIT,
     _parse_coords,
-    parse_filename,
     edit_project,
     generate_admin_token,
     grant_admin,
     list_projects,
     new_project,
+    parse_filename,
 )
 from pixel_hawk.config import get_config
 from pixel_hawk.geometry import Point, Rectangle, Size
@@ -559,6 +559,7 @@ class TestEditProject:
 
         assert not pending.exists()
         reloaded = await ProjectInfo.get(id=info.id)
+        assert reloaded.state == ProjectState.ACTIVE  # auto-transitioned from CREATING
         canonical = get_config().projects_dir / str(person.id) / reloaded.filename
         assert canonical.exists()
 
@@ -621,9 +622,7 @@ class TestEditProject:
         await new_project(20012, _make_test_png(), "image.png")
         info = await ProjectInfo.filter(owner=person).first()
 
-        result = await edit_project(
-            20012, info.id, name="sonic", coords="5_7_0_0", state=ProjectState.ACTIVE
-        )
+        result = await edit_project(20012, info.id, name="sonic", coords="5_7_0_0", state=ProjectState.ACTIVE)
 
         assert result is not None
         assert "sonic" in result

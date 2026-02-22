@@ -35,16 +35,18 @@ if TYPE_CHECKING:
 class Project:
     """Represents a wplace project stored on disk that has been validated."""
 
-    def __init__(self, path: Path, rect: Rectangle, info: ProjectInfo):
-        """Represents a wplace project stored at `path`, covering the area defined by `rect`."""
-        self.path = path
-        self.rect = rect
-        self.mtime = 0
-        try:
-            self.mtime = round(path.stat().st_mtime)
-        except OSError:
-            pass
+    def __init__(self, info: ProjectInfo):
+        """Represents a wplace project validated from a ProjectInfo record.
+
+        Derives path and rect from info. Requires info.owner to be prefetched.
+        """
         self.info = info
+        self.rect = info.rectangle
+        self.path = get_config().projects_dir / str(info.owner.id) / info.filename
+        try:
+            self.mtime = round(self.path.stat().st_mtime)
+        except OSError:
+            self.mtime = 0
 
     def has_been_modified(self) -> bool:
         """Check if the file has been modified since it was loaded."""
@@ -81,7 +83,7 @@ class Project:
             logger.error(f"{info.owner.name}/{info.name}: Size mismatch - DB says {rect.size}, file is {size}")
             return None
 
-        new = cls(path, rect, info)
+        new = cls(info)
         await new.run_diff()
         return new
 
